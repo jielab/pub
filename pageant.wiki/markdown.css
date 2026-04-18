@@ -1,6 +1,0 @@
-.main_img:hover {
-	transform: scale(1.4, 1.4);
-    border: thin dashed rgba(0, 0, 0, 1.00);
-    border-radius: 10px;
-    box-shadow: 4px 4px 5px -3px;
-}
