@@ -15,7 +15,7 @@ vars.dxs.alias <- c("^性别$|病人性别|患者性别", "^年龄$|病人年龄
 vars <- c(vars.basic, vars.dxs); vars.alias <- c(vars.basic.alias, vars.dxs.alias)
 vars.time <- c("开始受理时刻", "驶向现场时刻", "到达现场时刻", "病人上车时刻", "到达医院时刻")
 dxs <- list(
-	"Traffic" = "创伤-交通事故", "Poison" = "理化中毒",
+	"Traffic" = "创伤-交通事故", "Intoxication" = "理化中毒",
 	"Trauma" = c("创伤-暴力事件", "创伤-跌倒", "创伤-高处坠落", "创伤-其他原因", "其他-昏迷"),
 	"CVD" = c("其他-胸闷", "神经系统疾病-脑卒中", "神经系统疾病-其他疾病", "心血管系统疾病-其他疾病", "心血管系统疾病-胸痛"),
 	"Respiratory" = "呼吸系统疾病", "Mental" = "精神病", "NCD-Other" = c("泌尿系统疾病", "消化系统疾病", "内分泌系统疾病"),
@@ -65,7 +65,7 @@ for (year in years) {
 	dat0.list[[as.character(year)]] <- dat
 }
 saveRDS(dat0.list, "dat0.list.rds")
-write_xlsx(dat0.list[["2019"]][1:10000, intersect(c(vars.dxs, "疾病类型"), names(dat0.list[["2019"]])), drop=FALSE], "2019.train_dx.xlsx")
+write_xlsx("2019.train_dx.xlsx", dat0.list[["2019"]][1:10000, intersect(c(vars.dxs, "疾病类型"), names(dat0.list[["2019"]])), drop=FALSE])
 
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -122,7 +122,7 @@ lapply(dat1.list, function(dat) table(dat$dx_grp, useNA = "ifany"))
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # 🚩 表1 🦋
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-the_table2 <- purrr::imap_dfr(dat1.list, \(d, y) if (is.null(d) || !nrow(d)) tibble() else tibble(
+the_table1 <- purrr::imap_dfr(dat1.list, \(d, y) if (is.null(d) || !nrow(d)) tibble() else tibble(
   Year = as.integer(y),
   `EMS calls, N` = format(nrow(d), big.mark = ","),
   `Unique caller numbers, N` = format(n_distinct(d$电话, na.rm = TRUE), big.mark = ","),
@@ -132,44 +132,78 @@ the_table2 <- purrr::imap_dfr(dat1.list, \(d, y) if (is.null(d) || !nrow(d)) tib
   `Low-luck, n (%)` = sprintf("%s (%.1f%%)", format(sum(d$phone.luck == "low", na.rm = TRUE), big.mark = ","), 100 * mean(d$phone.luck == "low", na.rm = TRUE)),
   `High-luck, n (%)` = sprintf("%s (%.1f%%)", format(sum(d$phone.luck == "high", na.rm = TRUE), big.mark = ","), 100 * mean(d$phone.luck == "high", na.rm = TRUE))
 ))
-write_xlsx(the_table2, "Table1.xlsx"); data.table::fwrite(the_table2, "Table1.txt", sep = "\t", quote = FALSE, row.names = FALSE, na = "NA")
+write_xlsx(the_table1, "Table1.xlsx"); data.table::fwrite(the_table1, "Tab1.txt", sep = "\t", quote = FALSE, row.names = FALSE, na = "NA")
 
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# 🚩 图1
+# 🚩 图1. call-volume adjusted phenotype trends
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 yrs1 <- 2017:2024
-dat.fig1.week <- bind_rows(lapply(yrs1, \(y) dat1.list[[as.character(y)]] %>% filter(!is.na(dx_grp), !is.na(日期), dx_grp %in% dxs.grp) %>%
-  transmute(year = y, 日期 = as.Date(日期), dx = factor(as.character(dx_grp), levels = dxs.grp)) %>%
-  mutate(week_start = floor_date(日期, "week", week_start = 1)) %>% group_by(year, week_start, dx) %>% summarise(call_count = n(), days = n_distinct(日期), .groups = "drop") %>% filter(days == 7)))
-dat.fig1.month <- bind_rows(lapply(yrs1, \(y) dat1.list[[as.character(y)]] %>% filter(!is.na(dx_grp), !is.na(日期), dx_grp %in% dxs.grp) %>%
-  transmute(year = y, 日期 = as.Date(日期), dx = factor(as.character(dx_grp), levels = dxs.grp)) %>% mutate(month_start = floor_date(日期, "month")) %>%
-  count(year, month_start, dx, name = "n") %>% group_by(year, month_start) %>% mutate(total_calls_month = sum(n), pct = n / total_calls_month) %>% ungroup()))
-dat.fig1.week2 <- dat.fig1.week %>% group_by(year, week_start) %>% mutate(total_calls_week = sum(call_count), pct_week = call_count / total_calls_week) %>% ungroup()
 
-p1A <- ggplot(dat.fig1.week, aes(week_start, call_count, color = dx, group = dx)) + geom_line(linewidth = .9) + facet_wrap(~dx, scales = "free_y", ncol = 2) +
-  scale_color_manual(values = dxs.grp.color[dxs.grp], guide = "none") + scale_x_date(breaks = as.Date(paste0(yrs1, "-01-01")), labels = yrs1) +
-  labs(title = "A. Weekly EMS demand by phenotype", x = NULL, y = "Calls per complete ISO week") +
-  theme_ems(base_size = 11) + theme(strip.text = element_text(face = "bold", size = 12), axis.text = element_text(face = "bold"),
-  axis.text.x = element_text(angle = 90, vjust = .5, hjust = 1), plot.title = element_text(face = "bold", size = 14))
+dat.fig1.week <- bind_rows(lapply(yrs1, \(y){
+	dat1.list[[as.character(y)]] %>%
+		filter(!is.na(dx_grp), !is.na(日期), dx_grp %in% dxs.grp) %>%
+		transmute(year = y, 日期 = as.Date(日期), dx = factor(as.character(dx_grp), levels = dxs.grp)) %>%
+		mutate(week_start = floor_date(日期, "week", week_start = 1)) %>%
+		group_by(year, week_start, dx) %>% summarise(call_count = n(), days = n_distinct(日期), .groups = "drop") %>%
+		filter(days == 7)
+}))
 
-p1B <- ggplot(dat.fig1.month, aes(month_start, fct_rev(dx), fill = pct)) + geom_tile() +
-  scale_fill_viridis_c(name = NULL, labels = percent_format(accuracy = 1), guide = guide_colorbar(title = NULL, barwidth = unit(14, "cm"), barheight = unit(.5, "cm"))) +
-  scale_x_date(date_breaks = "1 year", date_labels = "%Y", expand = c(0, 0)) +
-  labs(title = "B. Monthly composition of the EMS spectrum", x = NULL, y = NULL, fill = NULL) +
-  theme_ems(base_size = 11) + theme(axis.text = element_text(face = "bold"), axis.text.y = element_text(size = 11), plot.title = element_text(face = "bold", size = 14), legend.position = "bottom", legend.direction = "horizontal")
+dat.fig1.week2 <- dat.fig1.week %>%
+	group_by(year, week_start) %>%
+	mutate(total_calls_week = sum(call_count), pct_week = call_count / total_calls_week) %>%
+	ungroup()
 
-Fig1 <- p1A / p1B + plot_layout(heights = c(2.2, 1)); Fig1; ggsave("Fig1.png", Fig1, width = 12, height = 10, dpi = 600)
+dat.fig1.month <- bind_rows(lapply(yrs1, \(y){
+	dat1.list[[as.character(y)]] %>%
+		filter(!is.na(dx_grp), !is.na(日期), dx_grp %in% dxs.grp) %>%
+		transmute(year = y, 日期 = as.Date(日期), dx = factor(as.character(dx_grp), levels = dxs.grp)) %>%
+		mutate(month_start = floor_date(日期, "month")) %>%
+		count(year, month_start, dx, name = "n") %>%
+		group_by(year, month_start) %>%
+		mutate(total_calls_month = sum(n), pct = n / total_calls_month) %>%
+		ungroup()
+}))
 
-save_xlsx1(list(
-  weekly_data = dat.fig1.week2,
-  weekly_total = dat.fig1.week2 %>% distinct(year, week_start, total_calls_week) %>% arrange(year, week_start),
-  monthly_data = dat.fig1.month,
-  monthly_total = dat.fig1.month %>% distinct(year, month_start, total_calls_month) %>% arrange(year, month_start),
-  weekly_summary = dat.fig1.week2 %>% group_by(dx) %>% summarise(weeks = n(), mean_weekly_calls = round(mean(call_count),1), sd_weekly_calls = round(sd(call_count),1), min_weekly_calls = min(call_count), max_weekly_calls = max(call_count), mean_weekly_pct = round(mean(pct_week),4), sd_weekly_pct = round(sd(pct_week),4), .groups = "drop"),
-  monthly_summary = dat.fig1.month %>% group_by(dx) %>% summarise(months = n(), mean_monthly_calls = round(mean(n),1), sd_monthly_calls = round(sd(n),1), min_monthly_calls = min(n), max_monthly_calls = max(n), mean_monthly_pct = round(mean(pct),4), sd_monthly_pct = round(sd(pct),4), min_monthly_pct = round(min(pct),4), max_monthly_pct = round(max(pct),4), .groups = "drop"),
-  yearly_summary = dat.fig1.month %>% group_by(year, dx) %>% summarise(year_total_calls = sum(n), mean_monthly_calls = round(mean(n),1), mean_monthly_pct = round(mean(pct),4), .groups = "drop")
-), "Fig1.data.xlsx")
+p1A <- ggplot(dat.fig1.week2, aes(week_start, pct_week, color = dx, group = dx)) +
+	geom_line(linewidth = .9) +
+	facet_wrap(~dx, scales = "free_y", ncol = 2) +
+	scale_color_manual(values = dxs.grp.color[dxs.grp], guide = "none") +
+	scale_y_continuous(labels = percent_format(accuracy = 1)) +
+	scale_x_date(breaks = as.Date(paste0(yrs1, "-01-01")), labels = yrs1) +
+	labs(title = "A. Weekly proportion of EMS calls by phenotype", x = NULL, y = "Percentage of weekly EMS calls") +
+	fig_theme(base_size = 11) +
+	theme(strip.text = element_text(face = "bold", size = 12), axis.text = element_text(face = "bold"),
+		axis.text.x = element_text(angle = 90, vjust = .5, hjust = 1),
+		plot.title = element_text(face = "bold", size = 14))
+
+p1B <- ggplot(dat.fig1.month, aes(month_start, fct_rev(dx), fill = pct)) +
+	geom_tile() +
+	scale_fill_viridis_c(name = NULL, labels = percent_format(accuracy = 1),
+		guide = guide_colorbar(title = NULL, barwidth = unit(14, "cm"), barheight = unit(.5, "cm"))) +
+	scale_x_date(date_breaks = "1 year", date_labels = "%Y", expand = c(0, 0)) +
+	labs(title = "B. Monthly composition of the EMS spectrum", x = NULL, y = NULL) +
+	fig_theme(base_size = 11) +
+	theme(axis.text = element_text(face = "bold"), axis.text.y = element_text(size = 11),
+		plot.title = element_text(face = "bold", size = 14),
+		legend.position = "bottom", legend.direction = "horizontal")
+
+Fig1 <- p1A / p1B + plot_layout(heights = c(2.2, 1))
+Fig1
+ggsave("Fig1.png", Fig1, width = 12, height = 10, dpi = 600)
+
+save_xlsx("Fig1.data.xlsx", list(
+	weekly_adjusted_data = dat.fig1.week2,
+	weekly_total = dat.fig1.week2 %>% distinct(year, week_start, total_calls_week) %>% arrange(year, week_start),
+	monthly_data = dat.fig1.month,
+	monthly_total = dat.fig1.month %>% distinct(year, month_start, total_calls_month) %>% arrange(year, month_start),
+	weekly_adjusted_summary = dat.fig1.week2 %>% group_by(dx) %>%
+		summarise(weeks = n(), mean_weekly_pct = round(mean(pct_week), 4),
+			sd_weekly_pct = round(sd(pct_week), 4),
+			min_weekly_pct = round(min(pct_week), 4), max_weekly_pct = round(max(pct_week), 4), .groups = "drop"),
+	yearly_adjusted_summary = dat.fig1.week2 %>% group_by(year, dx) %>%
+		summarise(year_total_calls = sum(call_count), mean_weekly_pct = round(mean(pct_week), 4), .groups = "drop")
+))
 
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -191,7 +225,6 @@ s2 <- bind_rows(lapply(years, \(y){
 			sig = !is.na(p) & p < .01, lo = pmax(enrich_low, 1 / cap2), hi = pmin(enrich_high, cap2), lf = enrich_low < 1 / cap2, hf = enrich_high > cap2)
 }))
 # 🏮
-
 Fig2 <- wrap_plots(lapply(dxs.grp, \(dx){
 	col <- dxs.grp.color[dx]; d <- s2 %>% filter(disease == dx)
 	ggplot(d, aes(y = year)) + geom_vline(xintercept = 1) +
@@ -208,12 +241,12 @@ Fig2 <- wrap_plots(lapply(dxs.grp, \(dx){
 		labs(title = dx, x = NULL, y = NULL) + theme_minimal() +
 		theme(axis.text = element_text(face = "bold"), axis.title = element_text(face = "bold"), axis.line = element_line(), legend.position = "none")
 }), nrow = 4, ncol = 2)
-Fig2; ggsave("Fig2.png", Fig2, width = 11.2, height = 10, dpi = 600)
+Fig2; ggsave("Fig2.png", Fig2, width = 12, height = 10, dpi = 600)
 
-save_xlsx1(list(
+save_xlsx("Fig2.data.xlsx", list(
 	panel_data = s2 %>% select(year, disease, n_low, n_high, pct_all, pct_low, pct_high, enrich_low, enrich_high, RR, p, sig, lo, hi),
 	summary = s2 %>% group_by(disease) %>% summarise(mean_RR = round(mean(RR, na.rm = TRUE), 3), min_RR = round(min(RR, na.rm = TRUE), 3), max_RR = round(max(RR, na.rm = TRUE), 3), n_sig_years = sum(sig, na.rm = TRUE), .groups = "drop")
-), "Fig2.data.xlsx")
+))
 
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -262,13 +295,13 @@ Fig3b <- ggplot(dat3b, aes(y = Year)) +
 	theme(axis.title = element_text(face = "bold"), axis.text = element_text(face = "bold"), axis.line = element_line(), plot.title = element_text(face = "bold"))
 
 Fig3 <- Fig3a | Fig3b
-Fig3; ggsave("Fig3.png", Fig3, width = 8, height = 6, dpi = 600)
+Fig3; ggsave("Fig3.png", Fig3, width = 12, height = 10, dpi = 600)
 
-save_xlsx1(list(
+save_xlsx("Fig3.data.xlsx", list(
 	panelA_data = dat3a,
 	panelB_data = dat3b,
 	by_dx_high_low = dat3 %>% filter(phone.luck %in% c("low", "high")) %>% group_by(dx_grp, phone.luck) %>% summarise(mean = round(mean(onsite, na.rm = TRUE), 2), sd = round(sd(onsite, na.rm = TRUE), 2), .groups = "drop")
-), "Fig3.data.xlsx")
+))
 
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -292,7 +325,7 @@ p4A <- ggplot(dat1, aes(日期, count3, color = phone.luck, group = interaction(
 	scale_x_date(labels = date_format("%b %d", locale = "en")) +
 	scale_y_continuous(breaks = pretty_breaks(n = 2)) +
 	labs(title = "A. EMS calls around 03/2022 PHSM", x = NULL, y = "3-day rolling mean") +
-	theme_ems(base_size = 12) +
+	fig_theme(base_size = 12) +
 	theme( 
 		axis.title = element_text(face = "bold", size = 15),
 		axis.text = element_text(face = "bold", size = 13),
@@ -315,7 +348,7 @@ p4B <- ggplot(dat1, aes(x = did_rr, y = fct_rev(dx_grp), color = dx_grp)) +
 	geom_text(aes(label = sig), hjust = -.4, fontface = "bold") +
 	scale_color_manual(values = dxs.grp.color[dxs.grp], guide = "none") +
 	labs(title = "B. DID effect during PHSM", x = "DID rate ratio", y = NULL) +
-	theme_ems(base_size = 12) +
+	fig_theme(base_size = 12) +
 	theme(
 		axis.title = element_text(face = "bold", size = 15),
 		axis.text = element_text(face = "bold", size = 13),
@@ -323,6 +356,7 @@ p4B <- ggplot(dat1, aes(x = did_rr, y = fct_rev(dx_grp), color = dx_grp)) +
 	)
 
 date_half <- as.Date("2022-11-11"); date_full <- as.Date("2022-12-07")
+
 dat1 <- bind_rows(
 	dat1.list[[as.character(year(date_half))]] %>%
 		transmute(日期 = as.Date(日期), dx_grp = factor(as.character(dx_grp), levels = dxs.grp), phone.luck = as.character(phone.luck)) %>%
@@ -333,12 +367,19 @@ dat1 <- bind_rows(
 ) %>%
 	count(dx_grp, phone.luck, 日期, name = "count") %>%
 	complete(dx_grp, phone.luck, 日期, fill = list(count = 0)) %>%
-	group_by(dx_grp, phone.luck) %>% arrange(日期) %>% mutate(count3 = roll3(count)) %>% ungroup() %>%
-	mutate(period = factor(case_when(日期 < date_half ~ "Pre-open", 日期 < date_full ~ "Initial relaxation", TRUE ~ "Full opening"),
-		levels = c("Pre-open", "Initial relaxation", "Full opening")))
-dat5A <- dat1
+	group_by(dx_grp, phone.luck) %>%
+	arrange(日期) %>%
+	mutate(count3 = roll3(count)) %>%
+	ungroup() %>%
+	mutate(period = factor(case_when(
+		日期 < date_half ~ "Pre-open",
+		日期 < date_full ~ "Initial relaxation",
+		TRUE ~ "Full opening"
+	), levels = c("Pre-open", "Initial relaxation", "Full opening")))
 
-p4C <- ggplot(dat1, aes(日期, count3, color = phone.luck, group = interaction(dx_grp, phone.luck))) +
+dat4C <- dat1
+
+p4C <- ggplot(dat4C, aes(日期, count3, color = phone.luck, group = interaction(dx_grp, phone.luck))) +
 	geom_vline(xintercept = c(date_half, date_full), linetype = "dashed", color = "orange", linewidth = 1) +
 	geom_line(linewidth = 1, na.rm = TRUE) +
 	scale_color_manual(values = c(low = "grey60", high = "#D55E00"), guide = "none") +
@@ -346,7 +387,7 @@ p4C <- ggplot(dat1, aes(日期, count3, color = phone.luck, group = interaction(
 	scale_x_date(labels = date_format("%b %d", locale = "en")) +
 	scale_y_continuous(breaks = pretty_breaks(n = 2)) +
 	labs(title = "C. Reopening period and EMS rebound pattern", x = NULL, y = "3-day rolling mean") +
-	theme_ems(base_size = 12) +
+	fig_theme(base_size = 12) +
 	theme(
 		axis.title = element_text(face = "bold", size = 15),
 		axis.text = element_text(face = "bold", size = 13),
@@ -354,25 +395,25 @@ p4C <- ggplot(dat1, aes(日期, count3, color = phone.luck, group = interaction(
 		plot.title = element_text(face = "bold", size = 16)
 	)
 
-dat1 <- dat1 %>% group_by(dx_grp, phone.luck, period) %>%
+dat4D <- dat4C %>%
+	group_by(dx_grp, phone.luck, period) %>%
 	summarise(mean_n = mean(count, na.rm = TRUE), .groups = "drop") %>%
-	group_by(dx_grp, phone.luck) %>% mutate(rr_vs_pre = mean_n / mean_n[period == "Pre-open"]) %>% ungroup()
-
-dat1.w <- dat1 %>% filter(period == "Full opening") %>%  # ❗这儿改动了：只保留 Full opening
+	group_by(dx_grp, phone.luck) %>%
+	mutate(rr_vs_pre = mean_n / mean_n[period == "Pre-open"]) %>%
+	ungroup() %>%
+	filter(period == "Full opening") %>%
 	select(dx_grp, phone.luck, period, rr_vs_pre) %>%
 	pivot_wider(names_from = phone.luck, values_from = rr_vs_pre) %>%
-	mutate(dx_grp = factor(dx_grp, levels = dxs.grp),
-		y = rev(seq_along(dxs.grp))[match(as.character(dx_grp), dxs.grp)])
-dat5B <- dat1.w
+	mutate(dx_grp = factor(as.character(dx_grp), levels = dxs.grp))
 
-p4D <- ggplot(dat1.w, aes(y = y)) +
+p4D <- ggplot(dat4D, aes(y = fct_rev(dx_grp))) +
 	geom_vline(xintercept = 1, linetype = "dashed") +
-	geom_segment(aes(x = low, xend = high, yend = y), color = "black", linewidth = .5) +
+	geom_segment(aes(x = low, xend = high, yend = fct_rev(dx_grp)), color = "black", linewidth = .5) +
 	geom_point(aes(x = low), color = "grey60", shape = 17, size = 3.2) +
 	geom_point(aes(x = high), color = "#D55E00", shape = 17, size = 3.2) +
-	scale_y_continuous(breaks = rev(seq_along(dxs.grp)), labels = rev(dxs.grp)) +
+	scale_y_discrete(limits = rev(dxs.grp)) +
 	labs(title = "D. Relative rebound compared with pre-open baseline", x = "Rate ratio vs pre-open", y = NULL) +
-	theme_ems(base_size = 12) +
+	fig_theme(base_size = 12) +
 	theme(
 		axis.title = element_text(face = "bold", size = 15),
 		axis.text = element_text(face = "bold", size = 13),
@@ -381,14 +422,15 @@ p4D <- ggplot(dat1.w, aes(y = y)) +
 	)
 
 Fig4 <- (p4A | p4C) / plot_spacer() / (p4B | p4D) + plot_layout(heights = c(2.2, 0.12, 1))
-Fig4; ggsave("Fig4.png", Fig4, width = 16, height = 16, dpi = 600)
+Fig4
+ggsave("Fig4.png", Fig4, width = 12, height = 12, dpi = 600)
 
-save_xlsx1(list(
+save_xlsx("Fig4.data.xlsx", list(
 	Fig4_panelA = dat4A %>% select(dx_grp, phone.luck, 日期, count, count3, post, high),
 	Fig4_panelB = dat4B,
-	Fig5_panelA = dat5A %>% select(dx_grp, phone.luck, 日期, count, count3, period),
-	Fig5_panelB = dat5B
-), "Fig4.data.xlsx")
+	Fig4_panelC = dat4C %>% select(dx_grp, phone.luck, 日期, count, count3, period),
+	Fig4_panelD = dat4D
+))
 
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -399,15 +441,63 @@ year_use <- "2021"; dist_max_m <- 1000
 house_sf <- read_excel(file.path(dir.dat, "深圳房价.xlsx")) %>% transmute(house.id = row_number(), house.price = as.numeric(房价), Lon = as.numeric(Lon), Lat = as.numeric(Lat)) %>% filter(is.finite(Lon), is.finite(Lat), is.finite(house.price)) %>% st_as_sf(coords = c("Lon", "Lat"), crs = 4326, remove = FALSE) %>% st_transform(3857)
 X_sf <- dat1.list[[year_use]] %>% transmute(X.id = row_number(), 地址类型, phone.sco = as.numeric(phone.sco), phone.luck = as.character(phone.luck), lon = as.numeric(接车地址经度), lat = as.numeric(接车地址纬度)) %>% filter(地址类型 == "住宅区", phone.luck %in% c("low", "high"), is.finite(lon), is.finite(lat)) %>% st_as_sf(coords = c("lon", "lat"), crs = 4326, remove = FALSE) %>% st_transform(3857)
 idx <- st_nearest_feature(X_sf, house_sf)
-dat.figS4 <- X_sf %>% mutate(house.price = house_sf$house.price[idx], dist_m = as.numeric(st_distance(X_sf, house_sf[idx, ], by_element = TRUE))) %>% st_drop_geometry() %>% mutate(house.price = if_else(dist_m <= dist_max_m, house.price, NA_real_))
-dat_bin <- dat.figS4 %>% filter(is.finite(house.price), is.finite(phone.sco)) %>% mutate(logp = log10(house.price)); h <- hist(dat_bin$logp, breaks = 10, plot = FALSE)
+dat.figS5 <- X_sf %>% mutate(house.price = house_sf$house.price[idx], dist_m = as.numeric(st_distance(X_sf, house_sf[idx, ], by_element = TRUE))) %>% st_drop_geometry() %>% mutate(house.price = if_else(dist_m <= dist_max_m, house.price, NA_real_))
+dat_bin <- dat.figS5 %>% filter(is.finite(house.price), is.finite(phone.sco)) %>% mutate(logp = log10(house.price)); h <- hist(dat_bin$logp, breaks = 10, plot = FALSE)
 s6 <- dat_bin %>% mutate(bin = cut(logp, breaks = h$breaks, include.lowest = TRUE)) %>% group_by(bin) %>% summarise(x = round(mean(range(logp)), 2), n = n(), y = round(mean(phone.sco), 2), sd = round(sd(phone.sco), 2), .groups = "drop") %>% arrange(x)
-png("FigS4.png", width = 10, height = 5, units = "in", res = 300); par(mar = c(5,4,3,5)+.2, font.lab = 2, font.axis = 2); hh <- hist(dat_bin$logp, breaks = h$breaks, freq = TRUE, col = "grey85", border = "grey40", main = "", xlab = "log10(house price)", ylab = ""); par(new = TRUE); plot(s6$x, s6$y, ylim = range(c(s6$y-s6$sd, s6$y+s6$sd), na.rm = TRUE), xlim = range(hh$breaks), axes = FALSE, xlab = NA, ylab = NA, pch = 16, cex = 1.2, col = "blue"); arrows(s6$x, s6$y-s6$sd, s6$x, s6$y+s6$sd, angle = 90, code = 3, length = .05, col = "grey60"); axis(side = 4, font.axis = 2); mtext(side = 4, line = 3, "Phone luck score", col = "blue", font = 2); dev.off()
-save_xlsx1(list(raw = dat.figS4, binned = s6), "FigS4.data.xlsx")
+#🏮
+png("Fig5.png", width = 10, height = 5, units = "in", res = 300); par(mar = c(5,4,3,5)+.2, font.lab = 2, font.axis = 2)
+hh <- hist(dat_bin$logp, breaks = h$breaks, freq = TRUE, col = "grey85", border = "grey40", main = "", xlab = "log10(house price)", ylab = "")
+par(new = TRUE); plot(s6$x, s6$y, ylim = range(c(s6$y-s6$sd, s6$y+s6$sd), na.rm = TRUE), xlim = range(hh$breaks), axes = FALSE, xlab = NA, ylab = NA, pch = 16, cex = 1.2, col = "blue")
+arrows(s6$x, s6$y-s6$sd, s6$x, s6$y+s6$sd, angle = 90, code = 3, length = .05, col = "grey60")
+axis(side = 4, font.axis = 2); mtext(side = 4, line = 3, "Phone luck score", col = "blue", font = 2)
+dev.off()
+save_xlsx("Fig5.data.xlsx", list(raw = dat.fig5, binned = s6))
 
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# 🚩 图S1
+# 🚩 图S1. raw phenotype trends
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+pS1A <- ggplot(dat.fig1.week, aes(week_start, call_count, color = dx, group = dx)) +
+	geom_line(linewidth = .9) +
+	facet_wrap(~dx, scales = "free_y", ncol = 2) +
+	scale_color_manual(values = dxs.grp.color[dxs.grp], guide = "none") +
+	scale_x_date(breaks = as.Date(paste0(yrs1, "-01-01")), labels = yrs1) +
+	labs(title = "A. Weekly EMS demand by phenotype", x = NULL, y = "Calls per complete week") +
+	fig_theme(base_size = 11) +
+	theme(strip.text = element_text(face = "bold", size = 12), axis.text = element_text(face = "bold"),
+		axis.text.x = element_text(angle = 90, vjust = .5, hjust = 1),
+		plot.title = element_text(face = "bold", size = 14))
+
+pS1B <- ggplot(dat.fig1.month, aes(month_start, fct_rev(dx), fill = pct)) +
+	geom_tile() +
+	scale_fill_viridis_c(name = NULL, labels = percent_format(accuracy = 1),
+		guide = guide_colorbar(title = NULL, barwidth = unit(14, "cm"), barheight = unit(.5, "cm"))) +
+	scale_x_date(date_breaks = "1 year", date_labels = "%Y", expand = c(0, 0)) +
+	labs(title = "B. Monthly composition of the EMS spectrum", x = NULL, y = NULL) +
+	fig_theme(base_size = 11) +
+	theme(axis.text = element_text(face = "bold"), axis.text.y = element_text(size = 11),
+		plot.title = element_text(face = "bold", size = 14),
+		legend.position = "bottom", legend.direction = "horizontal")
+
+FigS1 <- pS1A / pS1B + plot_layout(heights = c(2.2, 1))
+FigS1
+ggsave("FigS1.png", FigS1, width = 12, height = 10, dpi = 600)
+
+save_xlsx("FigS1.data.xlsx", list(
+	weekly_count_data = dat.fig1.week2,
+	monthly_data = dat.fig1.month,
+	weekly_summary = dat.fig1.week2 %>% group_by(dx) %>%
+		summarise(weeks = n(), mean_weekly_calls = round(mean(call_count), 1),
+			sd_weekly_calls = round(sd(call_count), 1),
+			mean_weekly_pct = round(mean(pct_week), 4), sd_weekly_pct = round(sd(pct_week), 4), .groups = "drop"),
+	yearly_summary = dat.fig1.week2 %>% group_by(year, dx) %>%
+		summarise(year_total_calls = sum(call_count), mean_weekly_calls = round(mean(call_count), 1),
+			mean_weekly_pct = round(mean(pct_week), 4), .groups = "drop")
+))
+
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# 🚩 图S2
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 plot_dx_trend <- function(dat_list, yrs = 2017:2024, dx_var = "dx_grp", dxs = dxs.grp, time.unit = "weekly", y.unit = "auto", var.group = "dxs", cap = 1000, out_png = NA, width = 12, height = 9, dpi = 300) {
   time.unit <- match.arg(time.unit, c("weekly", "hourly")); y.unit <- if (y.unit == "auto") ifelse(time.unit == "weekly", "count", "pct") else match.arg(y.unit, c("count", "pct"))
@@ -416,14 +506,11 @@ plot_dx_trend <- function(dat_list, yrs = 2017:2024, dx_var = "dx_grp", dxs = dx
   p <- wrap_plots(plots, nrow = ceiling(length(dxs)/2), ncol = 2, guides = "collect") & theme(legend.position = "bottom", legend.text = element_text(face = "bold", size = 12)) & guides(color = guide_legend(nrow = 2, byrow = TRUE, override.aes = list(linewidth = 2)))
   if (!is.na(out_png)) ggsave(out_png, p, width = width, height = height, dpi = dpi); invisible(p)
 }
-FigS1 <- plot_dx_trend(dat1.list, yrs = 2017:2024, dx_var = "dx_grp", dxs = dxs.grp, time.unit = "hourly", y.unit = "pct", var.group = "years", out_png = "FigS1.png"); FigS1
+FigS2 <- plot_dx_trend(dat1.list, yrs = 2017:2024, dx_var = "dx_grp", dxs = dxs.grp, time.unit = "hourly", y.unit = "pct", var.group = "years", out_png = "FigS2.png"); FigS2
 
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# 🚩 图S2
-#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# 🚩 图S2. Other EMS workflow intervals by phone-score group
+# 🚩 图S3. Other EMS workflow intervals by phone-score group
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 vars_time2 <- c("派车时间", "去程时间", "返程时间")
 labs_time2 <- c("Dispatch", "Driving", "Return")
@@ -451,7 +538,7 @@ dat2 <- dat1 %>%
 	pivot_wider(names_from = phone.luck, values_from = mean) %>%
 	mutate(diff = high - low)
 
-FigS2 <- wrap_plots(lapply(c("Dispatch", "Driving", "Return"), \(vv){
+FigS3 <- wrap_plots(lapply(c("Dispatch", "Driving", "Return"), \(vv){
 	d <- dat2 %>% filter(interval == vv)
 	ggplot(d, aes(y = Year)) +
 		geom_segment(aes(x = low, xend = high, yend = Year), color = "black", linewidth = .5) +
@@ -468,9 +555,9 @@ FigS2 <- wrap_plots(lapply(c("Dispatch", "Driving", "Return"), \(vv){
 		)
 }), nrow = 1)
 
-FigS2; ggsave("FigS2.png", FigS2, width = 11, height = 4.2, dpi = 600)
+FigS3; ggsave("FigS3.png", FigS3, width = 11, height = 4.2, dpi = 600)
 
-save_xlsx1(list(
+save_xlsx("FigS3.data.xlsx", list(
 	panel_data = dat2,
 	summary = dat2 %>% group_by(interval) %>% summarise(
 		mean_low = round(mean(low, na.rm = TRUE), 2),
@@ -478,17 +565,67 @@ save_xlsx1(list(
 		mean_diff = round(mean(diff, na.rm = TRUE), 2),
 		.groups = "drop"
 	)
-), "FigS2.data.xlsx")
+))
 
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# 🚩 图S3
+# 🚩 图S4. Raw disease-category trends
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-plot_dx <- function(dat_list, years, dx_var, dxs.cn, level = c("raw","group"), show = c("percent","count")){
-  level <- match.arg(level); show <- match.arg(show); dxs_raw <- unlist(dxs.cn, use.names = FALSE); map_grp2 <- stack(dxs.cn) %>% setNames(c("dx_raw","group"))
-  dat <- purrr::map_dfr(years, \(y){ d <- dat_list[[as.character(y)]]; if (is.null(d) || !nrow(d)) return(tibble()); d0 <- d %>% filter(!is.na(.data[[dx_var]])) %>% transmute(dx_raw = .data[[dx_var]]); out <- if (level == "raw") d0 %>% filter(dx_raw %in% dxs_raw) %>% count(group = dx_raw, name = "count") else d0 %>% left_join(map_grp2, by = "dx_raw") %>% filter(!is.na(group)) %>% count(group, name = "count"); out %>% mutate(year = y, pct = count / sum(count)) })
-  lev <- dat %>% filter(year == max(years)) %>% arrange(desc(pct)) %>% pull(group) %>% unique(); dat <- dat %>% mutate(group = factor(group, levels = lev), y = if (show == "percent") pct else count)
-  list(plot = ggplot(dat, aes(year, y, color = group, group = group)) + geom_line(linewidth = 1) + geom_point(size = 2) + scale_x_continuous(breaks = years) + if (show == "percent") scale_y_continuous(labels = scales::percent_format(accuracy = 1), expand = c(0,0)) else scale_y_continuous(expand = c(0,0)) + labs(x = "Year", y = if (show == "percent") "Percentage" else "Count", color = NULL) + theme_minimal(base_size = 12), data = dat)
+plot_dx <- function(dat_list, years, dx_var, dxs.cn, level = c("raw", "group"), show = c("percent", "count")){
+	level <- match.arg(level); show <- match.arg(show)
+	dxs_raw <- trimws(as.character(unlist(dxs.cn, use.names = FALSE)))
+	map_grp2 <- stack(dxs.cn) %>%
+		setNames(c("dx_raw", "group")) %>%
+		mutate(across(everything(), \(x) trimws(as.character(x))))
+
+	dat <- purrr::map_dfr(years, \(y){
+		d <- dat_list[[as.character(y)]]
+		if (is.null(d) || !nrow(d)) return(tibble())
+
+		d0 <- d %>%
+			transmute(dx_raw = trimws(as.character(.data[[dx_var]]))) %>%
+			filter(!is.na(dx_raw), dx_raw != "", dx_raw != "NA", dx_raw != "NaN")
+
+		out <- if (level == "raw") {
+			d0 %>%
+				filter(dx_raw %in% dxs_raw) %>%
+				count(group = dx_raw, name = "count")
+		} else {
+			d0 %>%
+				left_join(map_grp2, by = "dx_raw") %>%
+				count(group, name = "count")
+		}
+
+		out %>%
+			mutate(group = trimws(as.character(group))) %>%
+			filter(!is.na(group), group != "", group != "NA", group != "NaN") %>%
+			mutate(year = y, pct = count / sum(count))
+	})
+
+	lev <- dat %>%
+		filter(year == max(years), !is.na(group), group != "", group != "NA") %>%
+		arrange(desc(pct)) %>%
+		pull(group) %>%
+		unique()
+
+	dat <- dat %>%
+		filter(!is.na(group), group != "", group != "NA") %>%
+		mutate(group = factor(group, levels = lev), y = if (show == "percent") pct else count) %>%
+		filter(!is.na(group))
+
+	p <- ggplot(dat, aes(year, y, color = group, group = group)) +
+		geom_line(linewidth = 1) +
+		geom_point(size = 2) +
+		scale_x_continuous(breaks = years) +
+		scale_color_discrete(drop = TRUE, na.translate = FALSE) +
+		{if (show == "percent") scale_y_continuous(labels = percent_format(accuracy = 1), expand = c(0, 0)) else scale_y_continuous(expand = c(0, 0))} +
+		labs(x = "Year", y = if (show == "percent") "Percentage" else "Count", color = NULL) +
+		theme_minimal(base_size = 12)
+
+	list(plot = p, data = dat)
 }
-tmpS3 <- plot_dx(dat1.list, years, "疾病分类.ML", dxs, level = "raw", show = "percent"); FigS3 <- tmpS3$plot; FigS3; ggsave("FigS3.png", FigS3, width = 7, height = 4.2, dpi = 300); save_xlsx1(tmpS3$data, "FigS3.data.xlsx")
 
+tmpS4 <- plot_dx(dat1.list, years, "疾病分类.ML", dxs, level = "raw", show = "percent")
+FigS4 <- tmpS4$plot
+FigS4; ggsave("FigS4.png", FigS4, width = 11, height = 5.2, dpi = 300)
+save_xlsx("FigS4.data.xlsx", tmpS4$data)

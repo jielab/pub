@@ -476,7 +476,10 @@ def eval_phone_batch(phone_list):
     return {"sco": scores, "reason": reasons}
 
 # ================= DX =================
-def eval_dx_batch(df, data_name=None):
+from contextlib import nullcontext
+def eval_dx_batch(df, data_name=None, batch_size=512):
+    batch_size = int(batch_size)
+    
     load_model_once()
     if data_name is None:
         data_name = f"rows={len(df)}"
@@ -490,19 +493,22 @@ def eval_dx_batch(df, data_name=None):
         kw.append(k)
         kw_reason.append(r)
 
-    BATCH_SIZE = 128
+    BATCH_SIZE = batch_size
     preds_all, conf_all = [], []
-    log(f"Starting inference: {len(texts)} samples (batch={BATCH_SIZE})")
+    log(f"Starting inference: {len(texts)} samples (batch={BATCH_SIZE}, device={DEVICE})")
+
+    use_cuda = DEVICE == "cuda"
+    amp_ctx = torch.amp.autocast("cuda", dtype=torch.float16) if use_cuda else nullcontext()
 
     for i in range(0, len(texts), BATCH_SIZE):
-        if i % 2000 == 0:
+        if i % 10000 == 0:
             log(f"Inference progress: {i}/{len(texts)}")
 
         batch = texts[i : i + BATCH_SIZE]
         enc = TOKENIZER(batch, truncation=True, padding=True, max_length=128, return_tensors="pt")
         enc = {k: v.to(DEVICE) for k, v in enc.items()}
 
-        with torch.no_grad(), torch.amp.autocast("cuda", dtype=torch.float16):
+        with torch.inference_mode(), amp_ctx:
             logits = MODEL(**enc).logits
             probs = torch.softmax(logits, dim=1)
 
@@ -513,6 +519,8 @@ def eval_dx_batch(df, data_name=None):
         conf_all.extend(conf)
 
         del enc, logits, probs
+
+    if use_cuda:
         torch.cuda.empty_cache()
 
     ml = [ID2LABEL[int(i)] for i in preds_all]
@@ -520,15 +528,3 @@ def eval_dx_batch(df, data_name=None):
 
     log("Inference finished")
     return {"kw": kw, "kw_reason": kw_reason, "ml": ml, "ml_reason": ml_reason}
-
-
-    
-
-# ================= 房价地图 =================    
-# import pandas as pd
-# import keplergl
-# dat = pd.read_csv("/mnt/d/files/120.txt", sep = "\t"); # dat.head()
-# map = keplergl.KeplerGl(height = 500); map # 需要把这个作为最后一行命令
-# map.add_data(data = dat.copy(), name = "house")
-# %run 120.config.py
-# with open('120.config.py', 'w') as f: f.write('config = {}'.format(map.config))
