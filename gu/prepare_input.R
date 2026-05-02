@@ -45,4 +45,5 @@ for(tr in traits){
 	fwrite(z[, .(trait, lead_chr, lead_snp, lead_bp, effect_allele, other_allele, beta, risk_allele)], paste0(dir_risk, '/', tr, '.risk.tsv'), sep = '\t')
 }
 risk <- rbindlist(lapply(traits, function(tr) fread(paste0(dir_risk, '/', tr, '.risk.tsv'))), fill = TRUE)
-fwrite(risk, paste0(dirout, '/risk.tsv'), sep = '\t'); message('Done: ', paste0(dirout, '/risk.tsv'), ' and ', dir_lead)
+fwrite(risk, paste0(dirout, '/risk.tsv'), sep = '\t'); 
+message('Done: ', paste0(dirout, '/risk.tsv'), ' and ', dir_lead)

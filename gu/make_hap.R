@@ -3,7 +3,8 @@ args0 <- commandArgs(TRUE)
 has_root <- length(args0) && grepl("[/\\\\]", args0[1])
 root <- normalizePath(if (has_root) args0[1] else Sys.getenv("BALD_RES", "/data/sph-zhaor/analysis/bald/res"), winslash = "/", mustWork = FALSE)
 args <- if (has_root) args0[-1] else args0
-mat0 <- file.path(root, "mat"); hap0 <- file.path(root, "hap"); ld0 <- file.path(root, "ld"); riskf <- file.path(root, "risk.tsv")
+mat0 <- file.path(root, "mat"); hap0 <- file.path(root, "hap"); ld0 <- file.path(root, "ld")
+riskf <- file.path(root, "risk", "risk.tsv")
 dir.create(hap0, recursive = TRUE, showWarnings = FALSE)
 arch_names <- c("Vindija", "Altai", "Chagyr", "Denisova"); base_set <- c("A", "C", "G", "T")
 
