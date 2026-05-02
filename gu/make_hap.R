@@ -106,7 +106,9 @@ read_mat <- function(f, type){
   if (!nrow(x)) return(NULL)
   if (type == "kg") setnames(x, c("chr", "pos", "ref", "alt", "aa", paste0("s", seq_len(ncol(x) - 5))))
   else setnames(x, c("chr", "pos", "ref", "alt", "gt"))
-  x[, `:=`(ref = toupper(ref), alt = toupper(alt))]
+  x[, chr := sub("^chr", "", as.character(chr), ignore.case = TRUE)]
+  x[, `:=`(ref = toupper(trimws(ref)), alt = toupper(trimws(alt)))]
+  if ("aa" %in% names(x)) x[, aa := toupper(trimws(aa))]
   x
 }
 
@@ -126,22 +128,18 @@ harmonize_lead <- function(a, ref, alt){
   NA_character_
 }
 
-pick_lineage <- function(arch_stat, p){
-  if (!is.finite(p) || p >= 0.1 || !nrow(arch_stat)) return(list(best_lineage = NA_character_, keep_arch = character(0)))
+pick_lineage <- function(arch_stat, p, p_cut = 0.1, min_snp = 2L, min_prop = 0.5){
+  if (!is.finite(p) || p >= p_cut || !nrow(arch_stat)) return(list(best_lineage = NA_character_, keep_arch = character(0)))
   z <- copy(arch_stat)
-  z[, ok := n_compared_risk >= 2L & n_match_risk >= 2L & prop_match_risk >= 0.5]
-  nean <- z[archaic %chin% c("Vindija", "Altai", "Chagyr")]
-  den  <- z[archaic == "Denisova"]
-  nean_best <- if (nrow(nean[ok == TRUE])) nean[ok == TRUE][order(-prop_match_risk, -n_match_risk, -n_compared_risk)][1] else NULL
-  den_best  <- if (nrow(den[ok == TRUE]))  den[ok == TRUE][order(-prop_match_risk, -n_match_risk, -n_compared_risk)][1]  else NULL
-  if (is.null(nean_best) && is.null(den_best)) return(list(best_lineage = NA_character_, keep_arch = character(0)))
-  if (!is.null(nean_best) && is.null(den_best)) return(list(best_lineage = "Neanderthal", keep_arch = c("Vindija", "Altai", "Chagyr")))
-  if (is.null(nean_best) && !is.null(den_best)) return(list(best_lineage = "Denisovan", keep_arch = "Denisova"))
-  if (nean_best$prop_match_risk > den_best$prop_match_risk) return(list(best_lineage = "Neanderthal", keep_arch = c("Vindija", "Altai", "Chagyr")))
-  if (den_best$prop_match_risk > nean_best$prop_match_risk) return(list(best_lineage = "Denisovan", keep_arch = "Denisova"))
-  if (nean_best$n_match_risk > den_best$n_match_risk) return(list(best_lineage = "Neanderthal", keep_arch = c("Vindija", "Altai", "Chagyr")))
-  if (den_best$n_match_risk > nean_best$n_match_risk) return(list(best_lineage = "Denisovan", keep_arch = "Denisova"))
-  list(best_lineage = NA_character_, keep_arch = character(0))
+  z[, ok := n_compared_risk >= min_snp & n_match_risk >= min_snp & prop_match_risk >= min_prop]
+  nean <- z[archaic %chin% c("Vindija", "Altai", "Chagyr") & ok == TRUE]
+  den  <- z[archaic == "Denisova" & ok == TRUE]
+  if (!nrow(nean) && !nrow(den)) return(list(best_lineage = NA_character_, keep_arch = character(0)))
+  score <- function(d) d[order(-prop_match_risk, -n_match_risk, -n_compared_risk)][1]
+  nb <- if (nrow(nean)) score(nean) else NULL; db <- if (nrow(den)) score(den) else NULL
+  if (is.null(db) || (!is.null(nb) && (nb$prop_match_risk > db$prop_match_risk || (nb$prop_match_risk == db$prop_match_risk && nb$n_match_risk >= db$n_match_risk))))
+    return(list(best_lineage = "Neanderthal", keep_arch = nean[order(-prop_match_risk, -n_match_risk), archaic]))
+  list(best_lineage = "Denisovan", keep_arch = den[order(-prop_match_risk, -n_match_risk), archaic])
 }
 
 write_one <- function(x, f){
@@ -293,18 +291,15 @@ process_one <- function(tr0, id0){
   }
 
   arch_stat <- rbindlist(lapply(arch_names, function(an){
-    z1 <- core[!is.na(xcore[[an]])]
-    z2 <- core[!is.na(xcore[[an]]) & !is.na(risk_core_allele)]
+    ca <- xcore[[an]]; ok1 <- ca %chin% base_set; ok2 <- ok1 & !is.na(core$risk_core_allele)
+    z1 <- core[ok1]; z2 <- core[ok2]; a2 <- ca[ok2]
     data.table(
       trait = tr0, id = id0, lead_chr = chr0, lead_snp = snp0, lead_bp = bp0, archaic = an,
-      n_core_ld_snp = length(core_pos),
-      n_risk_defined = sum(!is.na(core$risk_core_allele)),
-      n_callable = nrow(z1),
-      n_compared_risk = nrow(z2),
-      n_match_risk = sum(xcore[[an]][!is.na(xcore[[an]]) & !is.na(core$risk_core_allele)] == z2$risk_core_allele, na.rm = TRUE),
-      n_match_ref = sum(xcore[[an]][!is.na(xcore[[an]])] == z1$ref, na.rm = TRUE),
-      n_match_alt = sum(xcore[[an]][!is.na(xcore[[an]])] == z1$alt, na.rm = TRUE),
-      prop_match_risk = fifelse(nrow(z2) > 0L, sum(xcore[[an]][!is.na(xcore[[an]]) & !is.na(core$risk_core_allele)] == z2$risk_core_allele, na.rm = TRUE) / nrow(z2), NA_real_)
+      n_core_ld_snp = length(core_pos), n_risk_defined = sum(!is.na(core$risk_core_allele)),
+      n_callable = nrow(z1), n_compared_risk = nrow(z2),
+      n_match_risk = sum(a2 == z2$risk_core_allele, na.rm = TRUE),
+      n_match_ref = sum(ca[ok1] == z1$ref, na.rm = TRUE), n_match_alt = sum(ca[ok1] == z1$alt, na.rm = TRUE),
+      prop_match_risk = fifelse(nrow(z2) > 0L, sum(a2 == z2$risk_core_allele, na.rm = TRUE) / nrow(z2), NA_real_)
     )
   }), fill = TRUE)
 

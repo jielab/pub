@@ -54,6 +54,9 @@ read_mat <- function(f, type){
   if (!nrow(x)) return(NULL)
   if (type == "kg") setnames(x, c("chr", "pos", "ref", "alt", "aa", paste0("s", seq_len(ncol(x) - 5))))
   else setnames(x, c("chr", "pos", "ref", "alt", "gt"))
+  x[, chr := sub("^chr", "", as.character(chr), ignore.case = TRUE)]
+  x[, `:=`(ref = toupper(trimws(ref)), alt = toupper(trimws(alt)))]
+  if ("aa" %in% names(x)) x[, aa := toupper(trimws(aa))]
   x
 }
 

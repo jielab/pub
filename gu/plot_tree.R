@@ -190,6 +190,7 @@ draw_tree <- function(tr, meta = NULL, tag = c("full", "main")) {
 }
 
 files <- list.files(phy0, pattern = "\\.phy_phyml_tree\\.txt$", recursive = TRUE, full.names = TRUE)
+if (!length(files)) quit(save = "no", status = 0)
 n_ppt <- c(full = 0L, main = 0L)
 
 for (treef in files) {
@@ -201,12 +202,13 @@ for (treef in files) {
   tr <- tryCatch(read_phyml_tree(treef), error = function(e) NULL)
   if (is.null(tr)) next
 
-  dev.new(width = st$ppt_w, height = st$ppt_h)
+  tf <- tempfile(fileext = ".png")
+  png(tf, width = st$ppt_w, height = st$ppt_h, units = "in", res = 300)
   draw_tree(tr, meta, tag)
   topptx_safe(if (tag == "main") ppt_main else ppt_full,
               width = st$ppt_w, height = st$ppt_h,
               append = n_ppt[tag] > 0L)
-  dev.off()
+  dev.off(); unlink(tf)
 
   n_ppt[tag] <- n_ppt[tag] + 1L
 }
