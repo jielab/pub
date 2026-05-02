@@ -24,7 +24,7 @@ log(){ echo "[$(date '+%F %T')] $*"; }
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # 🚩 s0: Prepare lead SNP and risk allele files
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Rscript "$dirscript/prepare_input.R" --dirgwas "$dirgwas" --dirout "$res" --traits $traits
+Rscript "$dirscript/input_prep.R" --dirgwas "$dirgwas" --dirout "$res" --traits $traits
 
 # 加上 Positive control 🏮
 if ! awk 'BEGIN{FS=OFS="\t"} NR>1 && $2=="rs35044562"{f=1} END{exit !f}' "$res/lead/bald.lead.tsv"; then
