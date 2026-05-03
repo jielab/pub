@@ -87,12 +87,13 @@ for(i in seq_len(nrow(keys))){
 		for(an in keep_arch){ z <- x2[[an]]; z[!z %in% base_set] <- "N"; seqs <- c(seqs, setNames(paste0(z, collapse = ""), an)) }
 		seqs <- c(seqs, Ancestral = paste0(anc, collapse = ""))
 		len <- unique(nchar(seqs)); if(length(len) != 1L) return(invisible(NULL))
+		lab0 <- names(seqs); lab12 <- substr(lab0, 1, 12)
 		phyf <- file.path(od, paste0(id0, ".", tag, ".phy")); con <- file(phyf, "w")
 		writeLines(sprintf("%d %d", length(seqs), len), con)
-		for(j in seq_along(seqs)) writeLines(sprintf("%-12s%s", substr(names(seqs)[j], 1, 12), seqs[j]), con)
+		for(j in seq_along(seqs)) writeLines(sprintf("%-12s%s", lab12[j], seqs[j]), con)
 		close(con)
-		meta <- data.table(label = names(seqs), type = fifelse(names(seqs) %in% keep_arch, "archaic", fifelse(names(seqs) == "Ancestral", "ancestral", "modern")))
-		meta <- merge(meta, sub[, .(label = hap_id, n, best_lineage, best_arch, best_match)], by = "label", all.x = TRUE)
+		meta <- data.table(label = lab12, original_label = lab0, type = fifelse(lab0 %in% keep_arch, "archaic", fifelse(lab0 == "Ancestral", "ancestral", "modern")))
+		meta <- merge(meta, sub[, .(original_label = hap_id, n, best_lineage, best_arch, best_match)], by = "original_label", all.x = TRUE)
 		fwrite(meta, file.path(od, paste0(id0, ".", tag, ".meta.tsv")), sep = "\t")
 	}
 	make_one(h, "full")

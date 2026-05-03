@@ -13,7 +13,7 @@ rd_gwas <- function(f){
 dirgwas <- arg(c('--dirgwas','-dirgwas')); dirout <- arg(c('--dirout','-dirout')); traits <- arg(c('--traits','-traits'), TRUE)
 if(is.null(dirgwas) || is.null(dirout) || is.null(traits)) stop('Usage: Rscript input_prep.R --dirgwas DIR --dirout DIR --traits bald bald12 ...')
 traits <- unlist(strsplit(paste(traits, collapse=' '), '[, ]+')); traits <- traits[nzchar(traits)]
-lead0 <- paste0(normalizePath(dirout, winslash='/', mustWork=FALSE), '/lead'); dir.create(lead0, TRUE, FALSE)
+lead0 <- paste0(normalizePath(dirout, winslash='/', mustWork=FALSE), '/lead')
 
 for(tr in traits){
 	cj_f <- paste0(dirgwas, '/cojo/', tr, '/', tr, '.jma.cojo'); gw_f <- paste0(dirgwas, '/clean/', tr, '/', tr, '.gz')

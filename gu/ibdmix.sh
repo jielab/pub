@@ -3,28 +3,28 @@
 dir0=/mnt/d
 g1k=$dir0/data/refGen/1kg_phase3
 arch0=$dir0/data/refGen/gu
+ibd=$dir0/software/IBDmix
 outdir=$dir0/analysis/gu/ibdmix
 
 pop=EUR
 sample=$g1k/$pop.sample.1id
-chrs="$(seq 1 22)"
+chrs="$(seq 1 22) X"
 njob=8
 lod_cut=5
 len_cut=1000
 
 mkdir -p "$outdir"/{vcf,gt,raw,summary,log}
+log(){ echo "[$(date '+%F %T')] $*"; }
+fix_chr(){ awk 'BEGIN{OFS="\t"} /^#/{print; next} {sub(/^chr/,"",$1); print}'; }
 
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # 🚩 IBDmix genome-wide scan for 1000G archaic tracts
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-log(){ echo "[$(date '+%F %T')] $*"; }
-fix_chr(){ awk 'BEGIN{OFS="\t"} /^#/{print; next} {sub(/^chr/,"",$1); print}'; }
-
 prep_modern(){
 	local c=$1 kg opt=""
 	kg=$g1k/ALL.chr$c.vcf.gz
-	[[ -f $kg ]] || kg=$g1k/ALL.chr${c}.vcf.gz
+	[[ -f $kg ]] || kg=$g1k/ALL.chr${c}.phase3_shapeit2_mvncall_integrated_v5a.20130502.genotypes.vcf.gz
 	[[ -s $sample ]] && opt="-S $sample"
 	[[ -s $outdir/vcf/modern.chr$c.vcf ]] || bcftools view $opt -r "$c" -m2 -M2 -v snps "$kg" | fix_chr > "$outdir/vcf/modern.chr$c.vcf"
 }

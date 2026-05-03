@@ -34,7 +34,8 @@ read_risk <- function(f){
 }
 risk <- read_risk(riskf)
 
-parse_id <- function(id) list(chr = suppressWarnings(as.integer(sub("\\..*$", "", id))), snp = sub("\\.[0-9]+$", "", sub("^[0-9]+\\.", "", id)), bp = suppressWarnings(as.integer(sub("^.*\\.", "", id))))
+chr_id <- function(x){ x <- toupper(sub("^CHR", "", as.character(x))); x[x == "X"] <- "23"; suppressWarnings(as.integer(x)) }
+parse_id <- function(id){ z <- strsplit(id, "\\.")[[1]]; list(chr = chr_id(z[1]), snp = paste(z[2:(length(z)-1)], collapse = "."), bp = suppressWarnings(as.integer(z[length(z)]))) }
 gt_hap <- function(x){ x <- gsub("\\|", "/", x); sp <- tstrsplit(x, "/", fixed = TRUE); list(a = sp[[1]], b = sp[[2]]) }
 roman_n <- function(x) vapply(x, function(i) as.character(as.roman(i)), character(1))
 to_base <- function(h, ref, alt){ out <- rep("N", length(h)); out[h == "0"] <- ref[h == "0"]; out[h == "1"] <- alt[h == "1"]; out }

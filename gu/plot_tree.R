@@ -77,7 +77,7 @@ tip_type <- function(meta, labs) {
     idx <- match(labs, meta$label)
     out[!is.na(idx)] <- as.character(meta$type[idx[!is.na(idx)]])
   }
-  out[labs %in% c("Vindija", "Altai", "Chagyr", "Denisova")] <- "archaic"
+  out[grepl("vindija|altai|chagyr|denisova|neand|archaic", labs, ignore.case = TRUE)] <- "archaic"
   out[labs == "Ancestral"] <- "ancestral"
   out[is.na(out)] <- "modern"
   out
