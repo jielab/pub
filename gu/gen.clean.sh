@@ -10,10 +10,10 @@ grep -oP 'href="\K[^"]+' index.html | grep -v '^?' | grep -v '^/' | grep -v '../
 cat files.txt | while read f; do; wget -c --inet4-only --timeout=20 --tries=5 --waitretry=5 "$baseurl/$f" done
 
 sample_file=samples_v3.20130502.ALL.panel
-awk 'BEGIN{OFS="\t"} NR>1 && $3=="EUR"{print $1,$1}' $sample_file > EUR.sample.txt
-awk 'BEGIN{OFS="\t"; print "#FID","IID","SEX"} NR>1 && $3=="EUR"{s=($4=="male"||$4=="M")?1:($4=="female"||$4=="F")?2:0; print $1,$1,s}' $sample_file > EUR.sex.txt
-awk 'NR>1 && $3=="EUR" && tolower($4)=="male"{print $1}' $sample_file > EUR.male.sample.ids
-awk 'NR>1 && $3=="EUR" && tolower($4)=="male"{print $1,$1,1}' $sample_file > EUR.male.txt
+awk 'BEGIN{OFS="\t"} NR>1 && $3=="EUR"{print $1,$1}' $sample_file > EUR.sample.2id
+awk 'BEGIN{OFS="\t"; print "#FID","IID","SEX"} NR>1 && $3=="EUR"{s=($4=="male"||$4=="M")?1:($4=="female"||$4=="F")?2:0; print $1,$1,s}' $sample_file > EUR.sex.3col
+awk 'NR>1 && $3=="EUR" && tolower($4)=="male"{print $1}' $sample_file > EUR.male.sample.1id
+awk 'NR>1 && $3=="EUR" && tolower($4)=="male"{print $1,$1,1}' $sample_file > EUR.male.3col
 
 for chr in {1..22} X Y; do
 	echo chr$chr
@@ -21,8 +21,8 @@ for chr in {1..22} X Y; do
 	[ "$f" = "ALL.chr$chr.vcf.gz" ] || mv "$f" ALL.chr$chr.vcf.gz
 	[ -f "$f.tbi" ] && mv "$f.tbi" ALL.chr$chr.vcf.gz.tbi; [ -f "$f.csi" ] && mv "$f.csi" ALL.chr$chr.vcf.gz.csi
 	tabix -f ALL.chr$chr.vcf.gz # 🏮
-	if [[ $chr == X ]]; then extra="--update-sex EUR.sex.txt --split-par b$GRCH"; elif [[ $chr == Y ]]; then extra="--update-sex EUR.sex.txt"; else extra=""; fi
-	plink2 --vcf ALL.chr$chr.vcf.gz --double-id --allow-extra-chr --keep EUR.sample.txt $extra --make-pgen --out EUR.chr$chr
+	if [[ $chr == X ]]; then extra="--update-sex EUR.sex.3col --split-par b$GRCH"; elif [[ $chr == Y ]]; then extra="--update-sex EUR.sex.3col"; else extra=""; fi
+	plink2 --vcf ALL.chr$chr.vcf.gz --double-id --allow-extra-chr --keep EUR.sample.2id $extra --make-pgen --out EUR.chr$chr
 done
 
 
@@ -37,13 +37,13 @@ elif [[ $GRCH == 38 ]]; then
 	split="b38"
 fi
 
-bcftools view -S EUR.male.sample.ids -r $par -m2 -M2 -v snps -Oz -o EUR.male.chrX.par.vcf.gz "$vcf"
-bcftools view -S EUR.male.sample.ids -r $nonPar -m2 -M2 -v snps -Oz -o EUR.male.chrX.nonPar.vcf.gz "$vcf"
+bcftools view -S EUR.male.sample.1id -r $par -m2 -M2 -v snps -Oz -o EUR.male.chrX.par.vcf.gz "$vcf"
+bcftools view -S EUR.male.sample.1id -r $nonPar -m2 -M2 -v snps -Oz -o EUR.male.chrX.nonPar.vcf.gz "$vcf"
 tabix -f -p vcf EUR.male.chrX.par.vcf.gz
 tabix -f -p vcf EUR.male.chrX.nonPar.vcf.gz
 
-plink2 --vcf EUR.male.chrX.par.vcf.gz --double-id --allow-extra-chr --update-sex EUR.male.txt --split-par $split --make-pgen --out EUR.male.chrX.par
-plink2 --vcf EUR.male.chrX.nonPar.vcf.gz --double-id --allow-extra-chr --update-sex EUR.male.txt --make-pgen --out EUR.male.chrX.nonPar
+plink2 --vcf EUR.male.chrX.par.vcf.gz --double-id --allow-extra-chr --update-sex EUR.male.3col --split-par $split --make-pgen --out EUR.male.chrX.par
+plink2 --vcf EUR.male.chrX.nonPar.vcf.gz --double-id --allow-extra-chr --update-sex EUR.male.3col --make-pgen --out EUR.male.chrX.nonPar
 
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -52,9 +52,9 @@ plink2 --vcf EUR.male.chrX.nonPar.vcf.gz --double-id --allow-extra-chr --update-
 mkdir -p Vindija Altai Chagyr Denisova Denisova25 
 
 for c in {1..22}; do
-	wget -c -P Vindija      "https://cdna.eva.mpg.de/neandertal/Vindija/VCF/Vindija33.19/chr${c}_mq25_mapab100.vcf.gz"{,.tbi}
-	wget -c -P Altai        "https://cdna.eva.mpg.de/neandertal/Vindija/VCF/Altai/chr${c}_mq25_mapab100.vcf.gz"{,.tbi}
-	wget -c -P Chagyr "https://cdna.eva.mpg.de/neandertal/Chagyrskaya/VCF/chr${c}.noRB.vcf.gz"{,.tbi}
-	wget -c -P Denisova    "https://cdna.eva.mpg.de/neandertal/Vindija/VCF/Denisova/chr${c}_mq25_mapab100.vcf.gz"{,.tbi}
-	wget -c -P Denisova25   "https://cdna.eva.mpg.de/denisova/Den25/VCF/chr${c}.Den25.L35MQ25.B30.map35_100.vcf.gz"{,.tbi}
+	wget -c -P Vindija	"https://cdna.eva.mpg.de/neandertal/Vindija/VCF/Vindija33.19/chr${c}_mq25_mapab100.vcf.gz"{,.tbi}
+	wget -c -P Altai	"https://cdna.eva.mpg.de/neandertal/Vindija/VCF/Altai/chr${c}_mq25_mapab100.vcf.gz"{,.tbi}
+	wget -c -P Chagyr	"https://cdna.eva.mpg.de/neandertal/Chagyrskaya/VCF/chr${c}.noRB.vcf.gz"{,.tbi}
+	wget -c -P Denisova		"https://cdna.eva.mpg.de/neandertal/Vindija/VCF/Denisova/chr${c}_mq25_mapab100.vcf.gz"{,.tbi}
+	wget -c -P Denisova25	"https://cdna.eva.mpg.de/denisova/Den25/VCF/chr${c}.Den25.L35MQ25.B30.map35_100.vcf.gz"{,.tbi}
 done

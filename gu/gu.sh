@@ -1,9 +1,5 @@
 #!/usr/bin/bash
-set -euo pipefail
 
-#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# 🚩 Config
-#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 dir0=/mnt/d
 g1k=$dir0/data/refGen/1kg_phase3
 arch0=$dir0/data/refGen/gu
@@ -112,7 +108,7 @@ awk 'BEGIN{FS=OFS="\t"} NR>1{print}' "$dirout/lead/pick.tsv" | while IFS=$'\t' r
 
 	kg=$g1k/ALL.chr$cl.vcf.gz
 	[[ -f $kg ]] || kg=$g1k/ALL.chr${cl}.phase3_shapeit2_mvncall_integrated_v5a.20130502.genotypes.vcf.gz
-	bcftools view -S "$g1k/EUR.sample.ids" -r "$cl:$lo-$hi" -m2 -M2 -v snps -Oz -o "$d/kg.vcf.gz" "$kg"
+	bcftools view -S "$g1k/EUR.sample.2id" -r "$cl:$lo-$hi" -m2 -M2 -v snps -Oz -o "$d/kg.vcf.gz" "$kg"
 	tabix -f -p vcf "$d/kg.vcf.gz"
 
 	for ad in "$arch0"/*; do
