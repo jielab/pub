@@ -4,8 +4,6 @@ GRCH=37
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # 🚩 下载数据，plink2格式
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-export http_proxy=http://192.168.0.1:7897
-export https_proxy=http://192.168.0.1:7897
 baseurl=https://ftp.1000genomes.ebi.ac.uk/vol1/ftp/release/20130502
 wget -q -O index.html "$baseurl/"
 grep -oP 'href="\K[^"]+' index.html | grep -v '^?' | grep -v '^/' | grep -v '../' | grep -v '/$' > files.txt
@@ -28,9 +26,6 @@ for chr in {1..22} X Y; do
 done
 
 
-#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# 🚩 对chrX数据进行特殊处理
-#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 vcf=ALL.chrX.vcf.gz
 if [[ $GRCH == 37 ]]; then
 	par="X:60001-2699520,X:154931044-155260560"
@@ -49,3 +44,17 @@ tabix -f -p vcf EUR.male.chrX.nonPar.vcf.gz
 
 plink2 --vcf EUR.male.chrX.par.vcf.gz --double-id --allow-extra-chr --update-sex EUR.male.txt --split-par $split --make-pgen --out EUR.male.chrX.par
 plink2 --vcf EUR.male.chrX.nonPar.vcf.gz --double-id --allow-extra-chr --update-sex EUR.male.txt --make-pgen --out EUR.male.chrX.nonPar
+
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# 🚩 下载古基因数据
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+mkdir -p Vindija Altai Chagyr Denisova Denisova25 
+
+for c in {1..22}; do
+	wget -c -P Vindija      "https://cdna.eva.mpg.de/neandertal/Vindija/VCF/Vindija33.19/chr${c}_mq25_mapab100.vcf.gz"{,.tbi}
+	wget -c -P Altai        "https://cdna.eva.mpg.de/neandertal/Vindija/VCF/Altai/chr${c}_mq25_mapab100.vcf.gz"{,.tbi}
+	wget -c -P Chagyr "https://cdna.eva.mpg.de/neandertal/Chagyrskaya/VCF/chr${c}.noRB.vcf.gz"{,.tbi}
+	wget -c -P Denisova    "https://cdna.eva.mpg.de/neandertal/Vindija/VCF/Denisova/chr${c}_mq25_mapab100.vcf.gz"{,.tbi}
+	wget -c -P Denisova25   "https://cdna.eva.mpg.de/denisova/Den25/VCF/chr${c}.Den25.L35MQ25.B30.map35_100.vcf.gz"{,.tbi}
+done
