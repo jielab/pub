@@ -15,7 +15,8 @@ sample_keep=$dirmod/$sample_label.1id
 dirout=$dir0/analysis/gu/ibdmix/$sample_label
 
 chrs=({1..22} X) 
-njob=8
+job_of_chr=2
+job_in_chr=5
 lod_cut=5
 len_cut=1000
 start_step=${START_STEP:-s1}
@@ -27,7 +28,7 @@ log(){ echo "[$(date '+%F %T')] $*"; }
 for x in awk bcftools md5sum find paste gzip zcat bash Rscript; do
 	command -v "$x" >/dev/null || { log "ERROR missing command: $x"; exit 1; }
 done
-for x in "$dirsoft/build/src/generate_gt" "$dirsoft/build/src/ibdmix" "$dirsoft/src/summary.sh" "$dirscript/ibdmix_report.R" "$sample_keep" "$sample_info"; do
+for x in "$dirsoft/build/src/generate_gt" "$dirsoft/build/src/ibdmix" "$dirsoft/src/summary.sh" "$dirscript/ibdmix_report.R" "$sample_keep"; do
 	[[ -s "$x" ]] || { log "ERROR missing required file: $x"; exit 1; }
 done
 
@@ -51,6 +52,11 @@ if [[ ! -s "$stamp" ]]; then
 fi
 echo "$sample_md5" > "$stamp"
 log "sample_keep: $sample_keep ($(awk 'NF{n++} END{print n+0}' "$sample_keep") samples)"
+if (( job_of_chr < 1 || job_in_chr < 1 )); then
+	log "ERROR: job_of_chr and job_in_chr must be positive integers"
+	exit 1
+fi
+log "parallel jobs: job_of_chr=$job_of_chr job_in_chr=$job_in_chr max=$((job_of_chr * job_in_chr))"
 
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -146,45 +152,62 @@ run_one(){
 	rm -f "$gt" "$raw"
 }
 
+run_chr(){
+	chr=$1
+	log "Start chr$chr"
+	tmp_chr=$dirout/tmp/chr$chr
+	rm -rf "$tmp_chr"
+	mkdir -p "$tmp_chr"
+
+	prep_modern "$chr" "$tmp_chr" || { log "ERROR: failed to prepare modern chr$chr"; rm -rf "$tmp_chr"; return 1; }
+
+	running=0
+	chr_status=0
+	chr_jobs=0
+	for ad in "$dirarc"/*; do
+		[[ -d "$ad" ]] || continue
+		anc=$(basename "$ad")
+		for anc_vcf in "$ad"/*chr"$chr"[_.]*.vcf.gz; do
+			[[ -s "$anc_vcf" ]] || continue
+			run_one "$chr" "$anc" "$anc_vcf" "$tmp_chr" &
+			running=$((running+1))
+			chr_jobs=$((chr_jobs+1))
+			if (( running >= job_in_chr )); then
+				wait -n || chr_status=1
+				running=$((running-1))
+			fi
+			break
+		done
+	done
+	if (( chr_jobs == 0 )); then log "ERROR: no archaic VCF found for chr$chr under $dirarc"; rm -rf "$tmp_chr"; return 1; fi
+	while (( running > 0 )); do
+		wait -n || chr_status=1
+		running=$((running-1))
+	done
+
+	rm -f "$tmp_chr/modern.chr$chr.vcf"
+	rm -rf "$tmp_chr"
+	if (( chr_status != 0 )); then log "ERROR: one or more jobs failed for chr$chr"; return 1; fi
+	log "Done chr$chr; temporary VCF/gt/raw removed"
+}
+
 if [[ "$start_step" == "s1" ]]; then
-	for chr in "${chrs[@]}"; do 
-		log "Start chr$chr"
-		tmp_chr=$dirout/tmp/chr$chr
-		rm -rf "$tmp_chr"
-		mkdir -p "$tmp_chr"
-
-		prep_modern "$chr" "$tmp_chr" || { log "ERROR: failed to prepare modern chr$chr"; exit 1; }
-
-		running=0
-		chr_status=0
-		chr_jobs=0
-		for ad in "$dirarc"/*; do
-			[[ -d "$ad" ]] || continue
-			anc=$(basename "$ad")
-			for anc_vcf in "$ad"/*chr"$chr"[_.]*.vcf.gz; do
-				[[ -s "$anc_vcf" ]] || continue
-				run_one "$chr" "$anc" "$anc_vcf" "$tmp_chr" &
-				running=$((running+1))
-				chr_jobs=$((chr_jobs+1))
-				if (( running >= njob )); then
-					wait -n || chr_status=1
-					running=$((running-1))
-				fi
-				break
-			done
-		done
-		if (( chr_jobs == 0 )); then log "ERROR: no archaic VCF found for chr$chr under $dirarc"; exit 1; fi
-		while (( running > 0 )); do
-			wait -n || chr_status=1
-			running=$((running-1))
-		done
-
-		rm -f "$tmp_chr/modern.chr$chr.vcf"
-		rm -rf "$tmp_chr"
-		if (( chr_status != 0 )); then log "ERROR: one or more jobs failed for chr$chr"; exit 1; fi
-		log "Done chr$chr; temporary VCF/gt/raw removed"
+	running_chr=0
+	s1_status=0
+	for chr in "${chrs[@]}"; do
+		run_chr "$chr" &
+		running_chr=$((running_chr+1))
+		if (( running_chr >= job_of_chr )); then
+			wait -n || s1_status=1
+			running_chr=$((running_chr-1))
+		fi
+	done
+	while (( running_chr > 0 )); do
+		wait -n || s1_status=1
+		running_chr=$((running_chr-1))
 	done
 	rmdir "$dirout/tmp" 2>/dev/null || true
+	if (( s1_status != 0 )); then log "ERROR: one or more chromosome jobs failed"; exit 1; fi
 elif [[ "$start_step" == "s2" ]]; then
 	log "Skip s1; reuse existing chromosome summary files in $dirout/summary"
 else
@@ -207,19 +230,24 @@ fi
 if [[ ! -s "$out" ]]; then log "ERROR: failed to merge summaries: $out"; exit 1; fi
 log "Done: $out"
 
-if [[ ! -s "$sample_info" ]]; then
-	log "ERROR: sample_info not found: $sample_info"; exit 1
-fi
-if [[ "$sample_info" == *1kg* ]]; then
-	by_group="super_pop"
-elif [[ "$sample_info" == *ukb* || "$sample_info" == *UKB* ]]; then
-	by_group="race"
+report_args=(--in "$out" --outdir "$dirout/report" --sample_keep "$sample_keep" --stats_for_locus "3:45859651-45909024;9:136130562-136150630")
+if [[ -s "$sample_info" ]]; then
+	if [[ "$sample_info" == *1kg* ]]; then
+		by_group="super_pop"
+	elif [[ "$sample_info" == *ukb* || "$sample_info" == *UKB* ]]; then
+		by_group="race"
+	else
+		log "WARNING: unknown sample_info type, skip by-group outputs: $sample_info"
+		by_group=""
+	fi
+	report_args+=(--sample_info "$sample_info")
+	if [[ -n "$by_group" ]]; then
+		report_args+=(--stats_by_group "$by_group")
+	fi
 else
-	log "ERROR: unknown sample_info type: $sample_info"; exit 1
+	log "WARNING: sample_info not found, skip by-group outputs: $sample_info"
 fi
-if ! Rscript "$dirscript/ibdmix_report.R" --in "$out" --outdir "$dirout/report" --sample_info "$sample_info" \
-	--sample_keep "$sample_keep" \
-	--stats_by_group "$by_group" --stats_for_locus "3:45859651-45909024;9:136130562-136150630"; then
+if ! Rscript "$dirscript/ibdmix_report.R" "${report_args[@]}"; then
 	log "ERROR: ibdmix_report.R failed"
 	exit 1
 fi

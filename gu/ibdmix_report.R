@@ -242,6 +242,7 @@ if (!is.na(sample_info_file) && file.exists(sample_info_file)) {
 	message("Matched sample_info IDs: ", uniqueN(ph$ID))
 } else if (!is.na(sample_info_file)) {
 	message("Sample info file not found, skip group-specific outputs: ", sample_info_file)
+	stats_by_group <- character(0)
 }
 
 if (is.null(ph)) {
