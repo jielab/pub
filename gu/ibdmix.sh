@@ -3,13 +3,13 @@
 set -o pipefail
 
 dir0=/mnt/d
-export PATH="$dir0/software/bin:$PATH" 
 dirmod=$dir0/refGen/1kg_phase3
 dirarc=$dir0/refGen/gu
 dirsoft=$dir0/software/IBDmix
 dirscript=$dir0/scripts/gu
 sample_info=$dir0/files/1kg.v3.sample.txt
-sample_label=EUR_EAS
+selected_loci_file=$dir0/files/gu.loci.bed
+sample_label=ALL
 
 sample_keep=$dirmod/$sample_label.1id
 dirout=$dir0/analysis/gu/ibdmix/$sample_label
@@ -28,7 +28,7 @@ log(){ echo "[$(date '+%F %T')] $*"; }
 for x in awk bcftools md5sum find paste gzip zcat bash Rscript; do
 	command -v "$x" >/dev/null || { log "ERROR missing command: $x"; exit 1; }
 done
-for x in "$dirsoft/build/src/generate_gt" "$dirsoft/build/src/ibdmix" "$dirsoft/src/summary.sh" "$dirscript/ibdmix_report.R" "$sample_keep"; do
+for x in "$dirsoft/build/src/generate_gt" "$dirsoft/build/src/ibdmix" "$dirsoft/src/summary.sh" "$dirscript/ibdmix.R" "$sample_keep" "$selected_loci_file"; do
 	[[ -s "$x" ]] || { log "ERROR missing required file: $x"; exit 1; }
 done
 
@@ -230,7 +230,7 @@ fi
 if [[ ! -s "$out" ]]; then log "ERROR: failed to merge summaries: $out"; exit 1; fi
 log "Done: $out"
 
-report_args=(--in "$out" --outdir "$dirout/report" --sample_keep "$sample_keep" --stats_for_locus "3:45859651-45909024;9:136130562-136150630")
+report_args=(--in "$out" --outdir "$dirout/report" --sample_keep "$sample_keep" --selected_loci "$selected_loci_file")
 if [[ -s "$sample_info" ]]; then
 	if [[ "$sample_info" == *1kg* ]]; then
 		by_group="super_pop"
@@ -247,8 +247,8 @@ if [[ -s "$sample_info" ]]; then
 else
 	log "WARNING: sample_info not found, skip by-group outputs: $sample_info"
 fi
-if ! Rscript "$dirscript/ibdmix_report.R" "${report_args[@]}"; then
-	log "ERROR: ibdmix_report.R failed"
+if ! Rscript "$dirscript/ibdmix.R" "${report_args[@]}"; then
+	log "ERROR: ibdmix.R failed"
 	exit 1
 fi
 log "All done. Report: $dirout/report"

@@ -1,19 +1,19 @@
 #!/usr/bin/env Rscript
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# 🚩 IBDmix report: genome-wide burden + optional locus-level summaries
+# 🚩 IBDmix: genome-wide burden + optional selected-loci summaries
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Basic genome-wide window burden:
-# Rscript ibdmix_report.R --in len1000.lod5.segments.tsv.gz --outdir report
+# Rscript ibdmix.R --in len1000.lod5.segments.tsv.gz --outdir report
 #
 # With sample groups:
-# Rscript ibdmix_report.R --in len1000.lod5.segments.tsv.gz --outdir report \
+# Rscript ibdmix.R --in len1000.lod5.segments.tsv.gz --outdir report \
 #   --sample_info /mnt/d/files/1kg.v3.sample.txt --stats_by_group super_pop,gender
 #
 # With focal loci:
-# Rscript ibdmix_report.R --in len1000.lod5.segments.tsv.gz --outdir report \
+# Rscript ibdmix.R --in len1000.lod5.segments.tsv.gz --outdir report \
 #   --sample_info /mnt/d/files/1kg.v3.sample.txt --stats_by_group super_pop,gender \
-#   --stats_for_locus '3:45859651-45909024;9:136130562-136150630'
+#   --selected_loci /mnt/d/files/gu.loci.bed
 
 suppressPackageStartupMessages(library(data.table))
 
@@ -27,10 +27,10 @@ get_arg <- function(key, default = NA_character_) {
 deprecated_args <- intersect(args, c("--summary_by", "--stats_by"))
 if (length(deprecated_args) > 0) {
 	stop("Deprecated option(s) not supported: ", paste(deprecated_args, collapse = ", "),
-		". Please use only --stats_by_group and --stats_for_locus.")
+		". Please use only --stats_by_group and --selected_loci.")
 }
 valid_args <- c("--in", "--outdir", "--sample_info", "--sample_keep", "--sample_id_col", "--stats_by_group",
-	"--stats_for_locus", "--window_size", "--locus_min_cover", "--top_n_windows")
+	"--selected_loci", "--window_size", "--locus_min_cover", "--top_n_windows")
 unknown_args <- args[grepl("^--", args) & !(args %in% valid_args)]
 if (length(unknown_args) > 0) stop("Unknown option(s): ", paste(unknown_args, collapse = ", "))
 
@@ -40,7 +40,7 @@ sample_info_file <- get_arg("--sample_info", NA_character_)
 sample_keep_file <- get_arg("--sample_keep", NA_character_)
 sample_id_col <- get_arg("--sample_id_col", "sample")
 stats_by_group_arg <- get_arg("--stats_by_group", NA_character_)
-stats_for_locus_arg <- get_arg("--stats_for_locus", NA_character_)
+selected_loci_arg <- get_arg("--selected_loci", NA_character_)
 window_size <- as.integer(get_arg("--window_size", "1000000"))
 locus_min_cover <- as.numeric(get_arg("--locus_min_cover", "0.5"))
 top_n_windows <- as.integer(get_arg("--top_n_windows", "100"))
@@ -126,6 +126,7 @@ unlink(file.path(outdir, c(
 	"locus_group.csv",
 	"locus_group.png",
 	"selected_percent.csv",
+	"selected_by_group.csv",
 	"selected_percent.png",
 	"input.check.tsv",
 	"group.by_anc.segment_percent.tsv",
@@ -152,7 +153,7 @@ message("Window size: ", window_size)
 if (!is.na(sample_info_file)) message("Sample info: ", sample_info_file)
 if (!is.na(sample_keep_file)) message("Sample keep: ", sample_keep_file)
 if (length(stats_by_group) > 0) message("Stats by group: ", paste(stats_by_group, collapse = ","))
-if (!is.na(stats_for_locus_arg) && nzchar(stats_for_locus_arg)) message("Stats for locus: ", stats_for_locus_arg)
+if (!is.na(selected_loci_arg) && nzchar(selected_loci_arg)) message("Selected loci: ", selected_loci_arg)
 
 count_do <- function(f) {
 	cmd <- paste("gzip -dc", shQuote(f), "| awk 'BEGIN{n=0} $1==\"DO\"{n++} END{print n}'")
@@ -228,7 +229,8 @@ if (!is.na(sample_info_file) && file.exists(sample_info_file)) {
 		if (length(miss) > 0) stop("stats_by_group column(s) not found in sample_info file: ", paste(miss, collapse = ", "))
 	}
 		sex_col <- intersect(c("sex", "gender", "Sex", "Gender", "SEX", "GENDER"), names(info))[1]
-		keep_cols <- unique(c(sample_id_col, stats_by_group, sex_col))
+		keep_cols <- unique(c(sample_id_col, stats_by_group, "pop", "super_pop", sex_col))
+		keep_cols <- keep_cols[!is.na(keep_cols) & keep_cols %in% names(info)]
 		ph <- unique(info[, keep_cols, with = FALSE])
 		setnames(ph, sample_id_col, "ID")
 		if (!is.na(sex_col)) setnames(ph, sex_col, ".sex_for_denom")
@@ -267,7 +269,7 @@ input.check <- data.table(
 	sample_keep = ifelse(is.na(sample_keep_file), "", sample_keep_file),
 	sample_id_col = sample_id_col,
 	stats_by_group = paste(stats_by_group, collapse = ","),
-	stats_for_locus = ifelse(is.na(stats_for_locus_arg), "", stats_for_locus_arg),
+	selected_loci = ifelse(is.na(selected_loci_arg), "", selected_loci_arg),
 	locus_min_cover = locus_min_cover
 )
 
@@ -492,6 +494,31 @@ dev.off()
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 parse_loci <- function(x) {
 	if (is.na(x) || !nzchar(x)) return(data.table())
+	if (file.exists(x)) {
+		bed <- fread(x, header = FALSE, fill = TRUE, colClasses = "character")
+		if (ncol(bed) < 3) stop("Bad selected_loci file: expected at least 3 columns: ", x)
+		setnames(bed, paste0("V", seq_len(ncol(bed))))
+		bed <- bed[!grepl("^\\s*(#|$)", V1)]
+		bed[, `:=`(
+			chrom = sub("^chr", "", V1, ignore.case = TRUE),
+			locus_start = suppressWarnings(as.integer(gsub(",", "", V2))),
+			locus_end = suppressWarnings(as.integer(gsub(",", "", V3))),
+			label = if ("V4" %in% names(bed)) trimws(V4) else NA_character_
+		)]
+		bed <- bed[!is.na(locus_start) & !is.na(locus_end) & nzchar(chrom)]
+		if (nrow(bed) == 0) stop("No valid selected loci in file: ", x)
+		bed[locus_end < locus_start, c("locus_start", "locus_end") := .(locus_end, locus_start)]
+		bed[is.na(label) | label == "", label := paste0("selected", .I)]
+		out <- bed[, .(
+			locus_id = make.unique(safe_name(label), sep = "_"),
+			locus = paste0(chrom, ":", locus_start, "-", locus_end),
+			chrom,
+			locus_start,
+			locus_end
+		)]
+		out[, locus_len := locus_end - locus_start + 1L]
+		return(out)
+	}
 	x <- gsub("–|—|−", "-", x)
 	parts <- trimws(unlist(strsplit(x, ";", fixed = TRUE)))
 	parts <- parts[nzchar(parts)]
@@ -513,7 +540,7 @@ parse_loci <- function(x) {
 	out
 }
 
-loci <- parse_loci(stats_for_locus_arg)
+loci <- parse_loci(selected_loci_arg)
 if (nrow(loci) > 0) {
 	loci[, chrom := as.character(chrom)]
 	lo <- rbindlist(lapply(seq_len(nrow(loci)), function(i) {
@@ -579,32 +606,42 @@ if (nrow(loci) > 0) {
 			locus.g[, match_percent := match_fraction * 100]
 			group_tag <- paste(stats_by_group, collapse = "_")
 			setorderv(locus.g, c(stats_by_group, "locus_id", "anc"))
-			fwrite(locus.g, out_file("selected_percent.csv"))
+			fwrite(locus.g, out_file("selected_by_group.csv"))
 		}
 	}
 
 
-	if (nrow(matches2) > 0) matches2[, chrom := as.character(chrom)]
+	if (nrow(matches2) > 0) {
+		matches2[, chrom := as.character(chrom)]
+		matches2[, covered_bp := pmin(total_overlap_bp, locus_len)]
+	}
 	locus.grid <- merge(copy(loci)[, tmp := 1], data.table(anc = ancs, tmp = 1), by = "tmp", allow.cartesian = TRUE)[, tmp := NULL]
 	if (nrow(matches2) > 0) {
 		locus.by_anc <- matches2[, .(
-			n_samples_match = uniqueN(ID),
+			n_samples_carrier = uniqueN(ID),
 			n_matching_segments = as.integer(sum(n_matching_segments, na.rm = TRUE)),
+			total_covered_bp = as.numeric(sum(covered_bp, na.rm = TRUE)),
 			median_max_locus_cover = as.numeric(median(max_locus_cover, na.rm = TRUE)),
 			median_best_slod = as.numeric(median(best_slod, na.rm = TRUE)),
 			median_best_segment_length = as.numeric(median(best_segment_length, na.rm = TRUE))
 		), by = .(locus_id, locus, chrom, locus_start, locus_end, locus_len, anc)]
 	} else {
 		locus.by_anc <- locus.grid[0, .(locus_id, locus, chrom, locus_start, locus_end, locus_len, anc,
-			n_samples_match = integer(), n_matching_segments = integer(), median_max_locus_cover = numeric(),
-			median_best_slod = numeric(), median_best_segment_length = numeric())]
+			n_samples_carrier = integer(), n_matching_segments = integer(), total_covered_bp = numeric(),
+			median_max_locus_cover = numeric(), median_best_slod = numeric(),
+			median_best_segment_length = numeric())]
 	}
 	locus.by_anc <- merge(locus.grid, locus.by_anc,
 		by = c("locus_id", "locus", "chrom", "locus_start", "locus_end", "locus_len", "anc"), all.x = TRUE)
-	for (cc in c("n_samples_match", "n_matching_segments")) locus.by_anc[is.na(get(cc)), (cc) := 0]
+	for (cc in c("n_samples_carrier", "n_matching_segments", "total_covered_bp")) {
+		locus.by_anc[is.na(get(cc)), (cc) := 0]
+	}
 	locus.by_anc[, n_samples_total := uniqueN(ph$ID)]
-	locus.by_anc[, match_fraction := n_samples_match / n_samples_total]
-	locus.by_anc[, match_percent := 100 * match_fraction]
+	locus.by_anc[, diploid_locus_bp := n_samples_total * 2 * locus_len]
+	locus.by_anc[, locus_burden_fraction := total_covered_bp / diploid_locus_bp]
+	locus.by_anc[, locus_burden_percent := 100 * locus_burden_fraction]
+	locus.by_anc[, carrier_fraction := n_samples_carrier / n_samples_total]
+	locus.by_anc[, carrier_percent := 100 * carrier_fraction]
 	setorder(locus.by_anc, locus_id, anc)
 	fwrite(locus.by_anc, out_file("selected_overall.csv"))
 
@@ -613,7 +650,11 @@ if (nrow(loci) > 0) {
 		den.g <- ph[, .(n_samples_total = uniqueN(ID)), by = stats_by_group]
 		if (nrow(matches2) > 0) {
 			mg <- merge(matches2, ph, by = "ID", all.x = FALSE)
-			locus.g <- mg[, .(n_samples_match = uniqueN(ID)), by = c(stats_by_group, "locus_id", "locus", "chrom", "locus_start", "locus_end", "locus_len", "anc")]
+			locus.g <- mg[, .(
+				n_samples_carrier = uniqueN(ID),
+				n_matching_segments = as.integer(sum(n_matching_segments, na.rm = TRUE)),
+				total_covered_bp = as.numeric(sum(covered_bp, na.rm = TRUE))
+			), by = c(stats_by_group, "locus_id", "locus", "chrom", "locus_start", "locus_end", "locus_len", "anc")]
 		} else {
 			locus.g <- data.table()
 		}
@@ -623,27 +664,41 @@ if (nrow(loci) > 0) {
 			group.levels, by = "tmp", allow.cartesian = TRUE)[, tmp := NULL]
 		locus.g <- merge(locus.grid.g, locus.g,
 			by = c(stats_by_group, "locus_id", "locus", "chrom", "locus_start", "locus_end", "locus_len", "anc"), all.x = TRUE)
-		locus.g[is.na(n_samples_match), n_samples_match := 0]
+		for (cc in c("n_samples_carrier", "n_matching_segments", "total_covered_bp")) {
+			locus.g[is.na(get(cc)), (cc) := 0]
+		}
 		locus.g <- merge(locus.g, den.g, by = stats_by_group, all.x = TRUE)
-		locus.g[, match_fraction := n_samples_match / n_samples_total]
-		locus.g[, match_percent := 100 * match_fraction]
+		locus.g[, diploid_locus_bp := n_samples_total * 2 * locus_len]
+		locus.g[, locus_burden_fraction := total_covered_bp / diploid_locus_bp]
+		locus.g[, locus_burden_percent := 100 * locus_burden_fraction]
+		locus.g[, carrier_fraction := n_samples_carrier / n_samples_total]
+		locus.g[, carrier_percent := 100 * carrier_fraction]
 		setorderv(locus.g, c(stats_by_group, "locus_id", "anc"))
-		fwrite(locus.g, out_file("selected_percent.csv"))
+		fwrite(locus.g, out_file("selected_by_group.csv"))
 		}
 
+	selected_match <- copy(matches2)
+	if (nrow(selected_match) > 0 && exists("ph")) {
+		add_cols <- intersect(c("ID", "pop", "super_pop"), names(ph))
+		selected_match <- merge(selected_match, unique(ph[, add_cols, with = FALSE]),
+			by = "ID", all.x = TRUE, sort = FALSE)
+		front <- intersect(c("locus_id", "locus", "chrom", "locus_start", "locus_end",
+			"locus_len", "ID", "pop", "super_pop", "anc"), names(selected_match))
+		selected_match <- selected_match[, c(front, setdiff(names(selected_match), front)), with = FALSE]
+	}
 	selected_sheets <- list(selected_overall = locus.by_anc)
-	if (exists("locus.g")) selected_sheets$selected_percent <- locus.g
-	selected_sheets$locus_matches <- matches2
+	if (exists("locus.g")) selected_sheets$selected_by_group <- locus.g
+	selected_sheets$selected_match <- selected_match
 	write_xlsx_sheets(selected_sheets, out_file("selected.xlsx"))
 
 	plot_selected_panel <- function(d, main_title, show_legend = FALSE) {
-		tab <- dcast(d, anc ~ locus, value.var = "match_percent", fill = 0)
+		tab <- dcast(d, anc ~ locus, value.var = "locus_burden_percent", fill = 0)
 		mat <- as.matrix(tab[, setdiff(names(tab), "anc"), with = FALSE])
 		rownames(mat) <- tab$anc
 		ymax <- max(mat, na.rm = TRUE) * 1.2
 		if (!is.finite(ymax) || ymax <= 0) ymax <- 1
 		barplot(mat, beside = TRUE, las = 1, cex.names = 0.82,
-			ylab = "Samples carrying selected-locus segment (%)",
+			ylab = "Selected-locus burden (% of diploid locus)",
 			xlab = "Selected locus",
 			main = main_title,
 			ylim = c(0, ymax),
@@ -667,12 +722,13 @@ if (nrow(loci) > 0) {
 	for (i in seq_along(panel_data)) {
 		plot_selected_panel(panel_data[[i]]$data, panel_data[[i]]$title, show_legend = i == 1L)
 	}
-	mtext("Selected loci: carrier percentage", outer = TRUE, line = 2.1, font = 2)
-	mtext(paste0("A sample is counted once per archaic reference when any IBDmix segment covers at least ",
-		round(100 * locus_min_cover), "% of the selected locus."), outer = TRUE, line = 0.7, cex = 0.75)
+	mtext("Selected loci: diploid locus burden", outer = TRUE, line = 2.1, font = 2)
+	mtext(paste0("Burden = selected-locus bp covered by IBDmix segments / diploid locus bp; ",
+		"segments must cover at least ", round(100 * locus_min_cover), "% of the locus."),
+		outer = TRUE, line = 0.7, cex = 0.75)
 	par(op)
 	dev.off()
-	unlink(out_file(c("selected_overall.csv", "selected_percent.csv")), force = TRUE)
+	unlink(out_file(c("selected_overall.csv", "selected_percent.csv", "selected_by_group.csv")), force = TRUE)
 	}
 
 message("Done:")

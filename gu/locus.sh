@@ -11,12 +11,16 @@ arch0=$dir0/refGen/gu
 dirscript=$dir0/scripts/gu
 dirgwas=$dir0/data/gwas/bald
 dirout=$dir0/analysis/gu/locus
+sample_file=$dir0/files/1kg.v3.sample.txt
 traits="bald"
 read -r -a traits_arr <<< "$traits"
 chrs="$(seq 1 22) X"
 ld_r2=0.98
 job_of_trait=1
 job_in_trait=12
+job_phyml=2
+filter_pop=${FILTER_POP:-YRI}
+filter_max_count=${FILTER_MAX_COUNT:-1}
 start_step=${START_STEP:-s1}
 
 mkdir -p "$dirout"/{lead,ld,coreVcf,mat,hap,phy,plot,report,log}
@@ -28,17 +32,25 @@ exec > >(tee "$dirout/log/locus.log") 2>&1
 # ============================================================
 log(){ echo "[$(date '+%F %T')] $*"; }
 log "START_STEP=$start_step"
-log "parallel jobs: job_of_trait=$job_of_trait job_in_trait=$job_in_trait"
+log "parallel jobs: job_of_trait=$job_of_trait job_in_trait=$job_in_trait job_phyml=$job_phyml"
+log "haplotype population filter: $filter_pop <= $filter_max_count; sample_file=$sample_file"
 clean_msg(){ [[ -f $1 ]] && tail -n 12 "$1" | tr '\t\r\n' '   ' | sed 's/  */ /g' | cut -c1-700; }
 id_mode(){ awk 'BEGIN{IGNORECASE=1} $1!="" && $1!="."{n++; if($1~/^rs[0-9]+$/) rs++; else if(toupper($1)~/^(CHR)?([0-9]+|X|Y|MT|M):[0-9]+:[ACGTN]+:[ACGTN,]+$/) cp++; if(n==5000) exit} END{if(n==0) print "missing"; else if(rs/n>.8) print "rsid"; else if(cp/n>.8) print "chrpos"; else print "other"}'; }
 data_rows(){ [[ -s $1 ]] && awk 'NR>1{n++} END{print n+0}' "$1" || echo 0; }
 trait_rows(){ [[ -s $1 ]] && awk -v t="$2" 'BEGIN{FS="\t"} NR>1 && $1==t{n++} END{print n+0}' "$1" || echo 0; }
+count_files(){ find "$1" -name "$2" 2>/dev/null | wc -l; }
 log_trait_count(){
 	local label=$1 f=$2 t
-	log "summary: $label (all traits; file path $f): $(data_rows "$f")"
+	log "summary: $label (all traits; file path $f) $(data_rows "$f")"
 	for t in $traits; do
-		log "summary: $label (trait $t; file path $f): $(trait_rows "$f" "$t")"
+		log "summary: $label (trait $t; file path $f) $(trait_rows "$f" "$t")"
 	done
+}
+clean_report_workbooks_only(){
+	find "$dirout/report" -mindepth 1 -type d -exec rm -rf {} +
+	find "$dirout/report" -maxdepth 1 -type f \
+		! \( -name 'all.xlsx' -o -name 'filtered.xlsx' -o -name 'selected.xlsx' \) \
+		-delete
 }
 valid_header(){ [[ -s $1 ]] && awk 'NR==1 && NF>1{ok=1} END{exit !ok}' "$1"; }
 valid_chr_ld(){
@@ -60,7 +72,8 @@ valid_trait_prep(){
 valid_mat_locus(){
 	local o=$1 expected_arch=$2 n_arch
 	[[ -s $o/kg.tsv && $(data_rows "$o/kg.tsv") -gt 0 ]] || return 1
-	n_arch=$(find "$o" -maxdepth 1 -type f -name '*.tsv' ! -name 'kg.tsv' -size +0c 2>/dev/null | wc -l)
+	[[ -s $o/kg.samples.tsv ]] || return 1
+	n_arch=$(find "$o" -maxdepth 1 -type f -name '*.tsv' ! -name 'kg.tsv' ! -name 'kg.samples.tsv' -size +0c 2>/dev/null | wc -l)
 	(( n_arch >= expected_arch ))
 }
 check_pbase(){
@@ -100,6 +113,8 @@ pvar_lookup(){
 for x in Rscript bcftools bgzip tabix plink2 phyml; do
 	command -v "$x" >/dev/null || { log "ERROR missing command: $x"; exit 1; }
 done
+[[ -s "$dirscript/locus.R" ]] || { log "ERROR missing R entrypoint: $dirscript/locus.R"; exit 1; }
+[[ -s $sample_file ]] || { log "ERROR missing 1000G sample metadata: $sample_file"; exit 1; }
 if [[ " $chrs " == *" X "* ]]; then
 	for f in \
 		"$dirmod/chrX.vcf.gz" "$dirmod/chrX.vcf.gz.tbi" \
@@ -115,7 +130,7 @@ fi
 
 # ============================================================
 # s1：准备 COJO/GWAS lead SNP，并按 1000G EUR LD 定义候选 loci。
-# 先用 prep_input.R 做 ID/POS/allele 匹配，再按 trait 和染色体运行 PLINK LD。
+# 先用 locus.R prep_input 做 ID/POS/allele 匹配，再按 trait 和染色体运行 PLINK LD。
 # 多 SNP 高 LD block 写入 lead/pick.tsv；单 SNP block 写入 lead/pick.single.tsv。
 # ============================================================
 
@@ -128,7 +143,7 @@ if (( need_prep == 0 )); then
 	log "s1 prep_input skip: existing lead files are complete for traits=$traits"
 else
 	log "s1 prep_input start"
-	Rscript "$dirscript/prep_input.R" --dirgwas "$dirgwas" --dirout "$dirout" --dirmod "$dirmod" --traits "${traits_arr[@]}"
+	Rscript "$dirscript/locus.R" prep_input --dirgwas "$dirgwas" --dirout "$dirout" --dirmod "$dirmod" --traits "${traits_arr[@]}"
 	log "s1 prep_input done: $(wc -l < "$dirout/lead/lead.assoc") lines in lead.assoc"
 fi
 
@@ -343,8 +358,8 @@ trait_ld_complete(){
 		[[ -s "$dirout/lead/$t.pick.tsv" ]] && awk 'NR>1' "$dirout/lead/$t.pick.tsv" >> "$dirout/lead/pick.tsv"
 		[[ -s "$dirout/lead/$t.pick.single.tsv" ]] && awk 'NR>1' "$dirout/lead/$t.pick.single.tsv" >> "$dirout/lead/pick.single.tsv"
 	done
-	log_trait_count "selected loci / 高 LD 候选 loci" "$dirout/lead/pick.tsv"
-	log_trait_count "single-SNP loci / 单 SNP loci" "$dirout/lead/pick.single.tsv"
+	log_trait_count "selected loci" "$dirout/lead/pick.tsv"
+	log_trait_count "single-SNP loci" "$dirout/lead/pick.single.tsv"
 
 	log "s1 done. Check: $dirout/lead/ld_debug.tsv and $dirout/lead/lead_1000G.fail.tsv"
 elif [[ "$start_step" == "s2" ]]; then
@@ -369,7 +384,7 @@ fi
 expected_arch=$(find "$arch0" -mindepth 1 -maxdepth 1 -type d | wc -l)
 npick=$(data_rows "$dirout/lead/pick.tsv")
 (( npick > 0 )) || { log "ERROR no high-LD blocks in $dirout/lead/pick.tsv; inspect $dirout/lead/lead_1000G.fail.tsv and rerun START_STEP=s1"; exit 1; }
-log_trait_count "selected loci / 高 LD 候选 loci" "$dirout/lead/pick.tsv"
+log_trait_count "selected loci" "$dirout/lead/pick.tsv"
 log "s2 start: $npick high-LD blocks from $dirout/lead/pick.tsv"
 
 # 单 locus 矩阵：抽取 1000G VCF，逐个 archaic 样本投影 REF/ALT。
@@ -391,19 +406,17 @@ run_locus_mat(){
 
 	if [[ $chr == 23 || $chr == X ]]; then
 		cl=X
-		par=nonPar
-		((bp>=60001 && bp<=2699520)) && par=par
-		((bp>=154931044 && bp<=155260560)) && par=par
-		kg=$dirmod/EUR.male.chrX.$par.vcf.gz
+		kg=$dirmod/chrX.vcf.gz
 		[[ -s $kg ]] || { log "ERROR missing chrX 1000G VCF for $tr $snp: $kg"; return 1; }
 		bcftools view -r "X:$lo-$hi" -m2 -M2 -v snps -Oz -o "$d/kg.vcf.gz" "$kg" || { log "ERROR bcftools failed: 1000G $tr chr$chr $snp"; return 1; }
 	else
 		kg=$dirmod/chr$cl.vcf.gz
 		[[ -s $kg ]] || kg=$dirmod/chr${cl}.phase3_shapeit2_mvncall_integrated_v5a.20130502.genotypes.vcf.gz
 		[[ -s $kg ]] || { log "ERROR missing 1000G VCF for $tr chr$chr $snp"; return 1; }
-		bcftools view -S "$dirmod/EUR.1id" -r "$cl:$lo-$hi" -m2 -M2 -v snps -Oz -o "$d/kg.vcf.gz" "$kg" || { log "ERROR bcftools failed: 1000G $tr chr$chr $snp"; return 1; }
+		bcftools view -r "$cl:$lo-$hi" -m2 -M2 -v snps -Oz -o "$d/kg.vcf.gz" "$kg" || { log "ERROR bcftools failed: 1000G $tr chr$chr $snp"; return 1; }
 	fi
 	tabix -f -p vcf "$d/kg.vcf.gz" || { log "ERROR tabix failed: $d/kg.vcf.gz"; return 1; }
+	bcftools query -l "$d/kg.vcf.gz" > "$o/kg.samples.tsv" || { log "ERROR bcftools query samples failed: $d/kg.vcf.gz"; return 1; }
 
 	for ad in "$arch0"/*; do
 		[[ -d $ad ]] || continue
@@ -425,7 +438,7 @@ run_locus_mat(){
 		bcftools view -r "$cl:$lo-$hi" -Oz -o "$arc_raw" "$avcf" || { log "ERROR bcftools failed: archaic raw $outname $cl:$lo-$hi"; return 1; }
 		tabix -f -p vcf "$arc_raw" || { log "ERROR tabix failed: $arc_raw"; return 1; }
 
-		Rscript "$dirscript/prep_input_archaic.R" "$d/kg.vcf.gz" "$arc_raw" "$arc_vcf" "$outname" > "$arc_log" 2>&1 || {
+		Rscript "$dirscript/locus.R" prep_archaic "$d/kg.vcf.gz" "$arc_raw" "$arc_vcf" "$outname" > "$arc_log" 2>&1 || {
 			log "ERROR archaic projection failed: $outname $cl:$lo-$hi; see $arc_log"
 			tail -20 "$arc_log"
 			return 1
@@ -487,15 +500,15 @@ rm -rf "$dirout/coreVcf"
 
 # ============================================================
 # s3：识别 inherited loci，构建风险单倍型，并生成系统发育树。
-# make_hap.R 会比较风险 haplotype 与 archaic allele，输出 inherited_segments；
-# make_phy.R 生成 PHYLIP 文件，phyml 建树，make_tree.R 绘制树图。
+# locus.R make_hap 会比较风险 haplotype 与 archaic allele，输出 inherited_segments；
+# locus.R make_phy 生成 PHYLIP 文件，phyml 建树，locus.R make_tree 绘制树图。
 # ============================================================
 
 # 单 trait inherited haplotype：输出 hap/site/core/region 表，并在 merge 后汇总 inherited_segments。
 run_trait_hap(){
 	local t=$1
 	log "s3 hap start: $t"
-	Rscript "$dirscript/make_hap.R" "$dirout" "$t" || return 1
+	Rscript "$dirscript/locus.R" make_hap "$dirout" "$t" || return 1
 	log "s3 hap done: $t"
 }
 
@@ -513,15 +526,31 @@ if (( s3_hap_status != 0 )); then
 	log "ERROR one or more s3 hap jobs failed"
 	exit 1
 fi
-Rscript "$dirscript/make_hap.R" "$dirout" merge || { log "ERROR make_hap.R merge failed"; exit 1; }
+Rscript "$dirscript/locus.R" make_hap "$dirout" merge || { log "ERROR locus.R make_hap merge failed"; exit 1; }
 inherited_tsv="$dirout/report/inherited_segments.tsv"
-log_trait_count "inherited loci / 古人来源候选 loci" "$inherited_tsv"
+hap_match_tsv="$dirout/report/hap_match.tsv"
+log_trait_count "inherited_segments.tsv inherited loci" "$inherited_tsv"
+log "summary: loci confidence reference (file path $inherited_tsv; columns p_ils,best_lineage,matched_archaics)"
+log "s3 population filter start: pop=$filter_pop max_count=$filter_max_count"
+Rscript "$dirscript/locus.R" filter_hap "$dirout" "$sample_file" "$filter_pop" "$filter_max_count" || { log "ERROR locus.R filter_hap failed"; exit 1; }
+filtered_hap_tsv="$dirout/report/filtered_hap_match.tsv"
+filtered_inherited_tsv="$dirout/report/filtered_inherited_segments.tsv"
+before_inherited_loci=$(data_rows "$inherited_tsv")
+after_inherited_loci=$(data_rows "$filtered_inherited_tsv")
+before_inherited_hap=$(data_rows "$hap_match_tsv")
+after_inherited_hap=$(data_rows "$filtered_hap_tsv")
+log_trait_count "filtered inherited loci" "$filtered_inherited_tsv"
+log "FILTER SUMMARY: inherited loci before_filter=$before_inherited_loci after_filter=$after_inherited_loci criteria=${filter_pop}<=$filter_max_count"
+log "FILTER SUMMARY: inherited haplotypes before_filter=$before_inherited_hap after_filter=$after_inherited_hap criteria=${filter_pop}<=$filter_max_count"
+log "FILTER SUMMARY: before-filter locus counts are in $dirout/report/all.xlsx sheet inherited_loci_counts"
+log "FILTER SUMMARY: before-filter haplotype counts are in $dirout/report/all.xlsx sheet inherited_haplotype_counts"
+log "FILTER SUMMARY: after-filter loci/haplotypes are in $dirout/report/filtered.xlsx sheets filtered_loci and filtered_haplotypes"
 
 # 单 trait PHYLIP：基于 inherited haplotype/archaic 匹配结果生成 phyml 输入文件。
 run_trait_make_phy(){
 	local t=$1
 	log "s3 make_phy start: $t"
-	Rscript "$dirscript/make_phy.R" "$dirout" "$t" || return 1
+	Rscript "$dirscript/locus.R" make_phy "$dirout" "$t" || return 1
 	log "s3 make_phy done: $t"
 }
 
@@ -539,13 +568,15 @@ if (( s3_phy_status != 0 )); then
 	log "ERROR one or more s3 make_phy jobs failed"
 	exit 1
 fi
-log "summary: PHYLIP files / 系统发育输入文件 (file path $dirout/phy): $(find "$dirout/phy" -name '*.phy' | wc -l)"
+log "summary: *.main.phy filtered haplotypes (file path $dirout/phy) $(count_files "$dirout/phy" '*.main.phy')"
+log "summary: filtering reference (workbook $dirout/report/filtered.xlsx; criteria $filter_pop <= $filter_max_count)"
+clean_report_workbooks_only
 
-# 单 trait 建树：对每个 PHYLIP 文件运行 phyml；已有 tree 文件时跳过。
+# 单 trait 建树：只对 *.main.phy 运行 phyml；已有 tree 文件时跳过。
 run_trait_phyml(){
 	local t=$1 f n status=0
-	n=$(find "$dirout/phy/$t" -name '*.phy' 2>/dev/null | wc -l)
-	log "s3 phyml trait start: $t ($n phy files)"
+	n=$(find "$dirout/phy/$t" -name '*.main.phy' 2>/dev/null | wc -l)
+	log "s3 phyml trait start: $t ($n main.phy files; tree source=*.main.phy only)"
 	while IFS= read -r f; do
 		(
 			if [[ -s "${f}_phyml_tree.txt" ]]; then
@@ -553,13 +584,13 @@ run_trait_phyml(){
 				exit 0
 			fi
 			log "s3 phyml start: $f"
-			phyml -i "$f" -m HKY85 -c 4 -a e -v e -b 100 || exit 1
+			phyml -i "$f" -m HKY85 -c 4 -a e -v e -b 100 < /dev/null || exit 1
 			log "s3 phyml done: $f"
 		) &
-		while [[ $(jobs -rp | wc -l) -ge $job_in_trait ]]; do
+		while [[ $(jobs -rp | wc -l) -ge $job_phyml ]]; do
 			wait -n || status=1
 		done
-	done < <(find "$dirout/phy/$t" -name '*.phy' 2>/dev/null | sort)
+	done < <(find "$dirout/phy/$t" -name '*.main.phy' 2>/dev/null | sort)
 	while [[ $(jobs -rp | wc -l) -gt 0 ]]; do
 		wait -n || status=1
 	done
@@ -584,25 +615,24 @@ if (( s3_phyml_status != 0 )); then
 	log "ERROR one or more s3 phyml trait jobs failed"
 	exit 1
 fi
-miss_tree=$(find "$dirout/phy" -name '*.phy' | while read -r f; do [[ -s "${f}_phyml_tree.txt" ]] || echo "$f"; done | head -1)
+miss_tree=$(find "$dirout/phy" -name '*.main.phy' | while read -r f; do [[ -s "${f}_phyml_tree.txt" ]] || echo "$f"; done | head -1)
 [[ -z $miss_tree ]] || { log "ERROR missing phyml tree for: $miss_tree"; exit 1; }
-Rscript "$dirscript/make_tree.R" "$dirout" || { log "ERROR make_tree.R failed"; exit 1; }
-n_tree_png=$(find "$dirout/plot" -maxdepth 1 -name 's8_tree_*.png' | wc -l)
-log "summary: tree PNG files / 系统发育树图 (file path $dirout/plot): $n_tree_png"
+Rscript "$dirscript/locus.R" make_tree "$dirout" || { log "ERROR locus.R make_tree failed"; exit 1; }
+n_tree_png=$(find "$dirout/plot" -maxdepth 1 -name 's8_tree_main_*.png' | wc -l)
+log "summary: loci phylogeny tree PNG (source *.main.phy; file path $dirout/plot) $n_tree_png"
 [[ $n_tree_png -gt 0 ]] || { log "ERROR no tree PNG generated in $dirout/plot"; exit 1; }
 
-# 报告整理：把 plot 中的树图复制到 report，并删除 report 下误生成的子目录。
-rm -f "$dirout/report"/tree_*.png "$dirout/report"/tree_*.pptx
-i=0
-find "$dirout/plot" -maxdepth 1 -name 's8_tree_*.png' | sort | while read -r f; do
-	i=$((i+1))
-	cp -f "$f" "$dirout/report/tree_$(printf '%04d' "$i").png" || { log "ERROR failed to copy tree PNG: $f"; exit 1; }
-done
-find "$dirout/report" -mindepth 1 -type d -exec rm -rf {} +
-
 # 最终 summary：运行结束后集中打印关键结果和文件路径，便于检查日志。
-log_trait_count "selected loci / 高 LD 候选 loci" "$dirout/lead/pick.tsv"
-log_trait_count "single-SNP loci / 单 SNP loci" "$dirout/lead/pick.single.tsv"
-log_trait_count "inherited loci / 古人来源候选 loci" "$inherited_tsv"
-log_trait_count "region summary / make_hap 全部候选 loci 汇总" "$dirout/report/region_summary.tsv"
+log_trait_count "selected loci" "$dirout/lead/pick.tsv"
+log_trait_count "single-SNP loci" "$dirout/lead/pick.single.tsv"
+log "summary: inherited loci before filter $before_inherited_loci"
+log "summary: inherited loci after filter $after_inherited_loci"
+log "summary: inherited haplotypes before filter $before_inherited_hap"
+log "summary: inherited haplotypes after filter $after_inherited_hap"
+log "summary: *.main.phy filtered haplotypes (file path $dirout/phy) $(count_files "$dirout/phy" '*.main.phy')"
+log "summary: loci confidence reference (workbook $dirout/report/all.xlsx; sheet inherited_segments; columns p_ils,best_lineage,matched_archaics)"
+log "summary: filtering reference (workbook $dirout/report/filtered.xlsx; criteria $filter_pop <= $filter_max_count)"
+log "summary: loci phylogeny tree PNG (source *.main.phy; file path $dirout/plot) $n_tree_png"
+clean_report_workbooks_only
+log "summary: report workbooks $dirout/report/all.xlsx $dirout/report/filtered.xlsx $dirout/report/selected.xlsx"
 log "ALL DONE"
