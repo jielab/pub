@@ -19,7 +19,7 @@ job_of_chr=2
 job_in_chr=5
 lod_cut=5
 len_cut=1000
-start_step=${START_STEP:-s1}
+start_step=${1:-${START_STEP:-s1}}
 
 mkdir -p "$dirout"/{summary,report,log,tmp}
 exec > >(tee "$dirout/log/ibdmix.log") 2>&1 
@@ -52,6 +52,7 @@ if [[ ! -s "$stamp" ]]; then
 fi
 echo "$sample_md5" > "$stamp"
 log "sample_keep: $sample_keep ($(awk 'NF{n++} END{print n+0}' "$sample_keep") samples)"
+log "START_STEP=$start_step"
 if (( job_of_chr < 1 || job_in_chr < 1 )); then
 	log "ERROR: job_of_chr and job_in_chr must be positive integers"
 	exit 1

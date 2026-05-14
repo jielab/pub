@@ -495,10 +495,18 @@ dev.off()
 parse_loci <- function(x) {
 	if (is.na(x) || !nzchar(x)) return(data.table())
 	if (file.exists(x)) {
-		bed <- fread(x, header = FALSE, fill = TRUE, colClasses = "character")
-		if (ncol(bed) < 3) stop("Bad selected_loci file: expected at least 3 columns: ", x)
-		setnames(bed, paste0("V", seq_len(ncol(bed))))
-		bed <- bed[!grepl("^\\s*(#|$)", V1)]
+		lines <- readLines(x, warn = FALSE)
+		lines <- trimws(lines)
+		lines <- lines[nzchar(lines) & !grepl("^#", lines)]
+		fields <- strsplit(lines, "\\s+")
+		if (!length(fields) || any(lengths(fields) < 3)) {
+			stop("Bad selected_loci file: expected at least 3 whitespace-separated columns: ", x)
+		}
+		max_cols <- max(lengths(fields))
+		bed <- rbindlist(lapply(fields, function(z) {
+			length(z) <- max_cols
+			as.list(setNames(z, paste0("V", seq_len(max_cols))))
+		}), fill = TRUE)
 		bed[, `:=`(
 			chrom = sub("^chr", "", V1, ignore.case = TRUE),
 			locus_start = suppressWarnings(as.integer(gsub(",", "", V2))),
